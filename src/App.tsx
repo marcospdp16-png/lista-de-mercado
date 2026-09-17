@@ -122,6 +122,7 @@ export default function App() {
   const [page, setPage] = useState("Dashboard");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<Filter>("Todos");
+  const [categoryFilter, setCategoryFilter] = useState("Todas");
   const [modal, setModal] = useState(false);
   const [edit, setEdit] = useState<number | null>(null);
   const [mobile, setMobile] = useState(false);
@@ -164,7 +165,8 @@ export default function App() {
         filter === "Todos" ||
         (filter === "Comprados" && x.purchased) ||
         (filter === "Pendentes" && !x.purchased)
-      )
+      ) &&
+      (categoryFilter === "Todas" || x.category === categoryFilter)
     );
 
     if (shoppingMode) {
@@ -174,7 +176,7 @@ export default function App() {
     return [...result].sort((a, b) =>
       Number(a.purchased) - Number(b.purchased)
     );
-  }, [items, search, filter, shoppingMode]);
+  }, [items, search, filter, categoryFilter, shoppingMode]);
 
   const nav = [
     ["Dashboard", LayoutDashboard],
@@ -249,6 +251,13 @@ export default function App() {
     }
   }
 
+  function clearPurchased() {
+    if (!bought) return;
+    if (confirm(`Remover ${bought} item(ns) já comprado(s) da lista?`)) {
+      setItems(v => v.filter(x => !x.purchased));
+    }
+  }
+
   function quickAdd(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key !== "Enter") return;
 
@@ -283,7 +292,7 @@ export default function App() {
             </div>
             <div>
               <b>Lista de Mercado</b>
-              <div className="text-xs text-slate-400">versão 1.0.5</div>
+              <div className="text-xs text-slate-400">versão 1.0.6</div>
             </div>
             <button
               className="ml-auto lg:hidden"
@@ -375,6 +384,26 @@ export default function App() {
                 <SummaryCard title="Total da lista" value={money(total)} subtitle={`${items.length} item(ns) no total`} />
               </div>
 
+              <div className="mt-7 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h2 className="font-bold">Progresso das compras</h2>
+                    <p className="text-sm text-slate-400">
+                      {bought} de {items.length} item(ns) comprados
+                    </p>
+                  </div>
+                  <span className="text-lg font-bold text-emerald-600">
+                    {items.length ? Math.round((bought / items.length) * 100) : 0}%
+                  </span>
+                </div>
+                <div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-100">
+                  <div
+                    className="h-full rounded-full bg-emerald-500 transition-all"
+                    style={{ width: `${items.length ? (bought / items.length) * 100 : 0}%` }}
+                  />
+                </div>
+              </div>
+
               <div className="mt-7 rounded-2xl border border-slate-200 bg-white shadow-sm">
                 <div className="flex flex-col gap-4 border-b border-slate-100 p-5 xl:flex-row xl:items-center xl:justify-between">
                   <div>
@@ -396,6 +425,16 @@ export default function App() {
                       <ShoppingCart size={18} />
                       {shoppingMode ? "Modo Compras ativo" : "Modo Compras"}
                     </button>
+
+                    {bought > 0 && (
+                      <button
+                        onClick={clearPurchased}
+                        className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-200 px-4 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50"
+                      >
+                        <Trash2 size={18} />
+                        Limpar comprados
+                      </button>
+                    )}
 
                     <button
                       onClick={openAdd}
@@ -419,7 +458,7 @@ export default function App() {
                       className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-3 outline-none focus:border-emerald-400"
                     />
                     <p className="mt-2 text-xs text-emerald-700">
-                      A categoria é identificada automaticamente. Preço e quantidade podem ser ajustados depois.
+                      A categoria e o preço podem ser ajustados depois. Produtos conhecidos são categorizados automaticamente.
                     </p>
                   </div>
 
@@ -436,6 +475,15 @@ export default function App() {
                         className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-4 outline-none focus:border-emerald-400"
                       />
                     </div>
+
+                    <select
+                      value={categoryFilter}
+                      onChange={e => setCategoryFilter(e.target.value)}
+                      className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-emerald-400"
+                    >
+                      <option>Todas</option>
+                      {categories.map(c => <option key={c}>{c}</option>)}
+                    </select>
 
                     <div className="flex rounded-xl bg-slate-100 p-1">
                       {(["Todos", "Pendentes", "Comprados"] as Filter[]).map(f => (
