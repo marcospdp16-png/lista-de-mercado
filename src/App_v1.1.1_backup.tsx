@@ -1,9 +1,8 @@
-// Lista de Mercado v1.2.0.5
-// Preparação da integração Supabase: identidade anônima e identificação da lista.
-// Mantém localStorage como persistência local/offline; sincronização dos dados será implementada nas próximas etapas.
+// Lista de Mercado v1.0.5
+// Melhorias: adição rápida, quantidade +/-,
+// resumo de pendentes/comprados/total e modo Compras.
 
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { supabase } from "./lib/supabase";
 import {
   BarChart3, CheckCircle2, Circle, ClipboardList, LayoutDashboard,
   ListChecks, Menu, Minus, Pencil, Plus, Search, Settings,
@@ -32,11 +31,6 @@ type PurchaseHistory = {
 const KEY = "lista-mercado-items-v1";
 const HISTORY_KEY = "lista-mercado-history-v1";
 const BUDGET_KEY = "lista-mercado-budget-v1";
-const SYNC_LIST_ID_KEY = "lista-mercado-sync-list-id-v1";
-const SYNC_CODE_KEY = "lista-mercado-sync-code-v1";
-
-type SyncStatus = "inicializando" | "sincronizado" | "offline" | "erro";
-
 
 const categories = [
   "Alimentos", "Laticínios", "Hortifruti", "Higiene", "Limpeza",
@@ -163,15 +157,6 @@ export default function App() {
       return 1000;
     }
   });
-  const [syncStatus, setSyncStatus] = useState<SyncStatus>("inicializando");
-  const [syncError, setSyncError] = useState("");
-  const [listId, setListId] = useState<string>(() =>
-    localStorage.getItem(SYNC_LIST_ID_KEY) || ""
-  );
-  const [linkCode, setLinkCode] = useState<string>(() =>
-    localStorage.getItem(SYNC_CODE_KEY) || ""
-  );
-
   const [form, setForm] = useState({
     name: "",
     category: "Alimentos",
@@ -182,82 +167,6 @@ export default function App() {
   const detectedCategory = detectCategory(form.name, form.category);
   const categoryWasDetected =
     Boolean(form.name.trim()) && detectedCategory !== "Outros";
-
-
-  useEffect(() => {
-    let active = true;
-
-    async function initializeSupabase() {
-      setSyncStatus("inicializando");
-      setSyncError("");
-
-      try {
-        let { data: sessionData, error: sessionError } =
-          await supabase.auth.getSession();
-
-        if (sessionError) throw sessionError;
-
-        if (!sessionData.session) {
-          const { error: signInError } =
-            await supabase.auth.signInAnonymously();
-
-          if (signInError) throw signInError;
-
-          const refreshed = await supabase.auth.getSession();
-          if (refreshed.error) throw refreshed.error;
-          sessionData = refreshed.data;
-        }
-
-        if (!sessionData.session) {
-          throw new Error("Não foi possível iniciar a sessão anônima.");
-        }
-
-        const { data, error } = await supabase.rpc(
-          "obter_ou_criar_lista"
-        );
-
-        if (error) throw error;
-
-        const lista = Array.isArray(data) ? data[0] : data;
-
-        if (!lista?.lista_id) {
-          throw new Error("O Supabase não retornou o identificador da lista.");
-        }
-
-        if (!active) return;
-
-        const nextListId = String(lista.lista_id);
-        const nextCode = String(lista.codigo_vinculacao || "");
-
-        setListId(nextListId);
-        setLinkCode(nextCode);
-        localStorage.setItem(SYNC_LIST_ID_KEY, nextListId);
-
-        if (nextCode) {
-          localStorage.setItem(SYNC_CODE_KEY, nextCode);
-        }
-
-        setSyncStatus("sincronizado");
-      } catch (error) {
-        console.error("Erro ao inicializar o Supabase:", error);
-
-        if (!active) return;
-
-        setSyncStatus(navigator.onLine ? "erro" : "offline");
-        setSyncError(
-          error instanceof Error
-            ? error.message
-            : "Não foi possível conectar ao Supabase."
-        );
-      }
-    }
-
-    initializeSupabase();
-
-    return () => {
-      active = false;
-    };
-  }, []);
 
   useEffect(() => {
     localStorage.setItem(KEY, JSON.stringify(items));
@@ -631,7 +540,7 @@ export default function App() {
             </div>
             <div>
               <b>Lista de Mercado</b>
-              <div className="text-xs text-slate-400">versão 1.2.0.5</div>
+              <div className="text-xs text-slate-400">versão 1.1.1</div>
             </div>
             <button
               className="ml-auto lg:hidden"
@@ -685,36 +594,6 @@ export default function App() {
           </span>
 
           <div className="ml-auto flex items-center gap-3">
-            <div
-              title={syncError || "Identidade e lista inicializadas no Supabase"}
-              className={`hidden items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold sm:flex ${
-                syncStatus === "sincronizado"
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                  : syncStatus === "offline"
-                    ? "border-amber-200 bg-amber-50 text-amber-700"
-                    : syncStatus === "erro"
-                      ? "border-red-200 bg-red-50 text-red-700"
-                      : "border-slate-200 bg-slate-50 text-slate-600"
-              }`}
-            >
-              <span className={`h-2 w-2 rounded-full ${
-                syncStatus === "sincronizado"
-                  ? "bg-emerald-500"
-                  : syncStatus === "offline"
-                    ? "bg-amber-500"
-                    : syncStatus === "erro"
-                      ? "bg-red-500"
-                      : "bg-slate-400"
-              }`} />
-              {syncStatus === "sincronizado"
-                ? "Nuvem pronta"
-                : syncStatus === "offline"
-                  ? "Offline"
-                  : syncStatus === "erro"
-                    ? "Nuvem indisponível"
-                    : "Conectando..."}
-            </div>
-
             <div className="hidden text-right sm:block">
               <b className="text-sm">Minha lista</b>
               <div className="text-xs text-slate-400">Compras do mês</div>
@@ -1442,10 +1321,10 @@ export default function App() {
                         Voltar ao Dashboard
                       </button>
                     </>
-              ) : (
-                <>
-                  {page === "Categorias" ? (
+                  ) : (
                     <>
+                  {page === "Categorias" ? (
+                <>
                   <div className="mb-7">
                     <p className="text-sm font-medium text-emerald-600">
                       Organização inteligente
@@ -1485,121 +1364,32 @@ export default function App() {
                   >
                     Voltar ao Dashboard
                   </button>
-                    </>
-                  ) : page === "Configurações" ? (
-                    <>
-                    <div className="mb-7">
-                      <p className="text-sm font-medium text-emerald-600">
-                        Sincronização
-                      </p>
-                      <h1 className="text-3xl font-bold">Configurações</h1>
-                      <p className="mt-2 text-slate-500">
-                        Preparação da sincronização entre seus dispositivos.
-                      </p>
-                    </div>
-
-                    <div className="grid gap-5 lg:grid-cols-2">
-                      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                        <div className="flex items-start justify-between gap-4">
-                          <div>
-                            <h2 className="font-bold">Conexão com a nuvem</h2>
-                            <p className="mt-1 text-sm text-slate-400">
-                              Supabase preparado para a próxima etapa de sincronização.
-                            </p>
-                          </div>
-
-                          <span className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                            syncStatus === "sincronizado"
-                              ? "bg-emerald-50 text-emerald-700"
-                              : syncStatus === "offline"
-                                ? "bg-amber-50 text-amber-700"
-                                : syncStatus === "erro"
-                                  ? "bg-red-50 text-red-700"
-                                  : "bg-slate-100 text-slate-600"
-                          }`}>
-                            {syncStatus === "sincronizado"
-                              ? "Pronto"
-                              : syncStatus === "offline"
-                                ? "Offline"
-                                : syncStatus === "erro"
-                                  ? "Erro"
-                                  : "Conectando"}
-                          </span>
-                        </div>
-
-                        <div className="mt-5 space-y-3 rounded-xl bg-slate-50 p-4 text-sm">
-                          <div className="flex justify-between gap-4">
-                            <span className="text-slate-500">Lista vinculada</span>
-                            <b>{listId ? "Sim" : "Não"}</b>
-                          </div>
-                          <div className="flex justify-between gap-4">
-                            <span className="text-slate-500">Identificador</span>
-                            <b className="max-w-[240px] truncate text-right font-mono text-xs">
-                              {listId || "Aguardando..."}
-                            </b>
-                          </div>
-                          <div className="flex justify-between gap-4">
-                            <span className="text-slate-500">Código de vinculação</span>
-                            <b className="font-mono text-xs">
-                              {linkCode || "Aguardando..."}
-                            </b>
-                          </div>
-                        </div>
-
-                        {syncError && (
-                          <div className="mt-4 rounded-xl bg-red-50 p-4 text-sm text-red-700">
-                            {syncError}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                        <h2 className="font-bold">Nesta versão</h2>
-                        <div className="mt-4 space-y-3 text-sm text-slate-600">
-                          <p>✓ Identidade anônima criada automaticamente.</p>
-                          <p>✓ Sua lista é criada/recuperada no Supabase.</p>
-                          <p>✓ Identificador da lista salvo localmente.</p>
-                          <p>✓ Código de vinculação preparado.</p>
-                          <p>✓ localStorage continua funcionando offline.</p>
-                        </div>
-                        <p className="mt-5 text-xs text-slate-400">
-                          A sincronização dos itens será ativada nas próximas etapas da v1.2.0.
-                        </p>
-                      </div>
-                    </div>
-
+                </>
+              ) : (
+                <div className="flex min-h-[60vh] items-center justify-center text-center">
+                  <div>
+                    <ListChecks
+                      className="mx-auto mb-4 text-emerald-500"
+                      size={48}
+                    />
+                    <h1 className="text-2xl font-bold">{page}</h1>
+                    <p className="mt-2 text-slate-500">
+                      Tela preparada para a próxima etapa.
+                    </p>
                     <button
                       onClick={() => setPage("Dashboard")}
-                      className="mt-6 rounded-xl bg-emerald-500 px-4 py-2.5 font-semibold text-white"
+                      className="mt-5 rounded-xl bg-emerald-500 px-4 py-2.5 font-semibold text-white"
                     >
                       Voltar ao Dashboard
                     </button>
-                    </>
-                  ) : (
-                    <div className="flex min-h-[60vh] items-center justify-center text-center">
-                      <div>
-                        <ListChecks
-                          className="mx-auto mb-4 text-emerald-500"
-                          size={48}
-                        />
-                        <h1 className="text-2xl font-bold">{page}</h1>
-                        <p className="mt-2 text-slate-500">
-                          Tela preparada para a próxima etapa.
-                        </p>
-                        <button
-                          onClick={() => setPage("Dashboard")}
-                          className="mt-5 rounded-xl bg-emerald-500 px-4 py-2.5 font-semibold text-white"
-                        >
-                          Voltar ao Dashboard
-                        </button>
-                      </div>
-                    </div>
-                  )}
+                  </div>
+                </div>
+                    )}
                 </>
               )}
                 </>
               )}
-          </div>
+            </div>
           )}
         </section>
       </main>
