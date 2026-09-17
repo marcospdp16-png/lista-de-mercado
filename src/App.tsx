@@ -145,6 +145,9 @@ export default function App() {
   const [mobile, setMobile] = useState(false);
   const [shoppingMode, setShoppingMode] = useState(false);
   const [collapsedCategories, setCollapsedCategories] = useState<Record<string, boolean>>({});
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyMonth, setHistoryMonth] = useState("Todos");
+  const [historyDetail, setHistoryDetail] = useState<PurchaseHistory | null>(null);
   const [form, setForm] = useState({
     name: "",
     category: "Alimentos",
@@ -235,6 +238,54 @@ export default function App() {
 
     return groups;
   }, [shown]);
+
+  const historyMonths = useMemo(() => {
+    const values = history.map(p =>
+      new Date(p.date).toLocaleDateString("pt-BR", {
+        month: "2-digit",
+        year: "numeric"
+      })
+    );
+    return Array.from(new Set(values));
+  }, [history]);
+
+  const filteredHistory = useMemo(() => {
+    const query = normalizeText(historySearch);
+
+    return history.filter(purchase => {
+      const month = new Date(purchase.date).toLocaleDateString("pt-BR", {
+        month: "2-digit",
+        year: "numeric"
+      });
+
+      const matchesMonth =
+        historyMonth === "Todos" || month === historyMonth;
+
+      const matchesSearch =
+        !query ||
+        purchase.items.some(item =>
+          normalizeText(item.name).includes(query)
+        );
+
+      return matchesMonth && matchesSearch;
+    });
+  }, [history, historySearch, historyMonth]);
+
+  const filteredHistoryTotal = filteredHistory.reduce(
+    (sum, purchase) => sum + purchase.total,
+    0
+  );
+
+  const filteredHistoryAverage = filteredHistory.length
+    ? filteredHistoryTotal / filteredHistory.length
+    : 0;
+
+  function deleteHistory(id: number) {
+    if (confirm("Excluir este registro do histórico?")) {
+      setHistory(v => v.filter(p => p.id !== id));
+      if (historyDetail?.id === id) setHistoryDetail(null);
+    }
+  }
 
   function toggleCategory(category: string) {
     setCollapsedCategories(v => ({
@@ -377,7 +428,7 @@ export default function App() {
             </div>
             <div>
               <b>Lista de Mercado</b>
-              <div className="text-xs text-slate-400">versão 1.0.8</div>
+              <div className="text-xs text-slate-400">versão 1.0.9</div>
             </div>
             <button
               className="ml-auto lg:hidden"
@@ -827,44 +878,79 @@ export default function App() {
                     </p>
                     <h1 className="text-3xl font-bold">Compras anteriores</h1>
                     <p className="mt-2 text-slate-500">
-                      Consulte compras finalizadas e os valores registrados.
+                      Pesquise, filtre e acompanhe seus gastos.
                     </p>
                   </div>
 
-                  <div className="mb-5 grid gap-4 sm:grid-cols-3">
+                  <div className="mb-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <SummaryCard
-                      title="Compras registradas"
-                      value={String(history.length)}
-                      subtitle="Histórico local"
+                      title="Compras no filtro"
+                      value={String(filteredHistory.length)}
+                      subtitle="Registros encontrados"
                     />
                     <SummaryCard
-                      title="Total histórico"
-                      value={money(history.reduce((sum, p) => sum + p.total, 0))}
+                      title="Total no período"
+                      value={money(filteredHistoryTotal)}
                       subtitle="Soma das compras"
                     />
                     <SummaryCard
+                      title="Média por compra"
+                      value={money(filteredHistoryAverage)}
+                      subtitle="Valor médio"
+                    />
+                    <SummaryCard
                       title="Itens registrados"
-                      value={String(history.reduce((sum, p) => sum + p.itemCount, 0))}
-                      subtitle="Quantidade de produtos"
+                      value={String(
+                        filteredHistory.reduce((sum, p) => sum + p.itemCount, 0)
+                      )}
+                      subtitle="Itens no filtro"
                     />
                   </div>
 
-                  {history.length === 0 ? (
+                  <div className="mb-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex flex-col gap-3 lg:flex-row">
+                      <div className="relative flex-1">
+                        <Search
+                          className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                          size={18}
+                        />
+                        <input
+                          value={historySearch}
+                          onChange={e => setHistorySearch(e.target.value)}
+                          placeholder="Pesquisar produto no histórico..."
+                          className="w-full rounded-xl border border-slate-200 bg-slate-50 py-3 pl-10 pr-4 outline-none focus:border-emerald-400"
+                        />
+                      </div>
+
+                      <select
+                        value={historyMonth}
+                        onChange={e => setHistoryMonth(e.target.value)}
+                        className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none focus:border-emerald-400"
+                      >
+                        <option>Todos</option>
+                        {historyMonths.map(month => (
+                          <option key={month}>{month}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {filteredHistory.length === 0 ? (
                     <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center shadow-sm">
                       <ListChecks className="mx-auto mb-4 text-slate-300" size={48} />
-                      <h2 className="font-bold">Nenhuma compra finalizada</h2>
+                      <h2 className="font-bold">Nenhuma compra encontrada</h2>
                       <p className="mt-2 text-sm text-slate-400">
-                        Quando você finalizar uma compra, ela aparecerá aqui.
+                        Ajuste a pesquisa ou o período selecionado.
                       </p>
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      {history.map(purchase => (
+                      {filteredHistory.map(purchase => (
                         <div
                           key={purchase.id}
                           className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
                         >
-                          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                             <div>
                               <h2 className="font-bold">
                                 Compra de{" "}
@@ -874,13 +960,30 @@ export default function App() {
                                 {purchase.itemCount} item(ns)
                               </p>
                             </div>
-                            <b className="text-xl text-emerald-600">
-                              {money(purchase.total)}
-                            </b>
+
+                            <div className="flex flex-wrap items-center gap-2">
+                              <b className="mr-2 text-xl text-emerald-600">
+                                {money(purchase.total)}
+                              </b>
+
+                              <button
+                                onClick={() => setHistoryDetail(purchase)}
+                                className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold hover:bg-slate-50"
+                              >
+                                Ver detalhes
+                              </button>
+
+                              <button
+                                onClick={() => deleteHistory(purchase.id)}
+                                className="rounded-xl border border-red-200 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-50"
+                              >
+                                Excluir
+                              </button>
+                            </div>
                           </div>
 
                           <div className="mt-4 flex flex-wrap gap-2">
-                            {purchase.items.map(item => (
+                            {purchase.items.slice(0, 8).map(item => (
                               <span
                                 key={item.id}
                                 className="rounded-full bg-slate-100 px-3 py-1.5 text-xs text-slate-600"
@@ -888,6 +991,11 @@ export default function App() {
                                 {item.name} × {item.quantity}
                               </span>
                             ))}
+                            {purchase.items.length > 8 && (
+                              <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700">
+                                +{purchase.items.length - 8} item(ns)
+                              </span>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -971,6 +1079,66 @@ export default function App() {
           )}
         </section>
       </main>
+
+      {historyDetail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
+          <div className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold">Detalhes da compra</h2>
+                <p className="text-sm text-slate-400">
+                  {new Date(historyDetail.date).toLocaleDateString("pt-BR")}
+                </p>
+              </div>
+              <button onClick={() => setHistoryDetail(null)}>
+                <X className="text-slate-400" />
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-3">
+              <SummaryCard
+                title="Itens"
+                value={String(historyDetail.itemCount)}
+                subtitle="Quantidade total"
+              />
+              <SummaryCard
+                title="Total"
+                value={money(historyDetail.total)}
+                subtitle="Valor da compra"
+              />
+              <SummaryCard
+                title="Produtos"
+                value={String(historyDetail.items.length)}
+                subtitle="Produtos diferentes"
+              />
+            </div>
+
+            <div className="mt-5 max-h-80 space-y-2 overflow-y-auto">
+              {historyDetail.items.map(item => (
+                <div
+                  key={item.id}
+                  className="flex items-center justify-between rounded-xl bg-slate-50 p-3"
+                >
+                  <div>
+                    <b>{item.name}</b>
+                    <div className="text-xs text-slate-400">
+                      {item.category} • {item.quantity} × {money(item.unitPrice)}
+                    </div>
+                  </div>
+                  <b>{money(item.quantity * item.unitPrice)}</b>
+                </div>
+              ))}
+            </div>
+
+            <button
+              onClick={() => setHistoryDetail(null)}
+              className="mt-5 w-full rounded-xl bg-emerald-500 px-4 py-3 font-semibold text-white"
+            >
+              Fechar
+            </button>
+          </div>
+        </div>
+      )}
 
       {modal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
