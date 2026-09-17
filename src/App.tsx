@@ -2,7 +2,7 @@
 // Melhorias: adição rápida, quantidade +/-,
 // resumo de pendentes/comprados/total e modo Compras.
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   BarChart3, CheckCircle2, Circle, ClipboardList, LayoutDashboard,
   ListChecks, Menu, Minus, Pencil, Plus, Search, Settings,
@@ -127,6 +127,7 @@ export default function App() {
   const [edit, setEdit] = useState<number | null>(null);
   const [mobile, setMobile] = useState(false);
   const [shoppingMode, setShoppingMode] = useState(false);
+  const [collapsedCategories, setCollapsedCategories] = useState<Record<string, boolean>>({});
   const [form, setForm] = useState({
     name: "",
     category: "Alimentos",
@@ -177,6 +178,49 @@ export default function App() {
       Number(a.purchased) - Number(b.purchased)
     );
   }, [items, search, filter, categoryFilter, shoppingMode]);
+
+  const groupedShown = useMemo(() => {
+    const groups = categories
+      .map(category => {
+        const categoryItems = shown.filter(item => item.category === category);
+        if (!categoryItems.length) return null;
+
+        return {
+          category,
+          items: categoryItems,
+          total: categoryItems.reduce(
+            (sum, item) => sum + item.quantity * item.unitPrice,
+            0
+          ),
+          pending: categoryItems.filter(item => !item.purchased).length
+        };
+      })
+      .filter(Boolean) as {
+        category: string;
+        items: Item[];
+        total: number;
+        pending: number;
+      }[];
+
+    const others = shown.filter(item => !categories.includes(item.category));
+    if (others.length) {
+      groups.push({
+        category: "Outros",
+        items: others,
+        total: others.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0),
+        pending: others.filter(item => !item.purchased).length
+      });
+    }
+
+    return groups;
+  }, [shown]);
+
+  function toggleCategory(category: string) {
+    setCollapsedCategories(v => ({
+      ...v,
+      [category]: !v[category]
+    }));
+  }
 
   const nav = [
     ["Dashboard", LayoutDashboard],
@@ -292,7 +336,7 @@ export default function App() {
             </div>
             <div>
               <b>Lista de Mercado</b>
-              <div className="text-xs text-slate-400">versão 1.0.6</div>
+              <div className="text-xs text-slate-400">versão 1.0.7</div>
             </div>
             <button
               className="ml-auto lg:hidden"
@@ -502,6 +546,27 @@ export default function App() {
                     </div>
                   </div>
 
+                  <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {groupedShown.map(group => (
+                      <button
+                        key={group.category}
+                        onClick={() => toggleCategory(group.category)}
+                        className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-emerald-200 hover:bg-emerald-50"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="font-semibold">{group.category}</span>
+                          <span className="text-xs font-bold text-emerald-600">
+                            {group.items.length} item(ns)
+                          </span>
+                        </div>
+                        <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+                          <span>{group.pending} pendente(s)</span>
+                          <b>{money(group.total)}</b>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+
                   <div className="mt-4 hidden overflow-x-auto md:block">
                     <table className="w-full text-left text-sm">
                       <thead>
@@ -517,8 +582,25 @@ export default function App() {
                       </thead>
 
                       <tbody>
-                        {shown.map(x => (
-                          <tr
+                        {groupedShown.map(group => (
+                          <Fragment key={group.category}>
+                            <tr className="border-y border-slate-100 bg-slate-50">
+                              <td colSpan={7} className="px-3 py-3">
+                                <button
+                                  onClick={() => toggleCategory(group.category)}
+                                  className="flex w-full items-center justify-between text-left"
+                                >
+                                  <span className="font-bold">{group.category}</span>
+                                  <span className="text-xs text-slate-500">
+                                    {group.items.length} item(ns) • {money(group.total)}
+                                  </span>
+                                </button>
+                              </td>
+                            </tr>
+
+                            {!collapsedCategories[group.category] &&
+                              group.items.map(x => (
+                                                                <tr
                             key={x.id}
                             className={`border-b border-slate-50 ${
                               x.purchased ? "opacity-60" : ""
@@ -586,7 +668,9 @@ export default function App() {
                                 </button>
                               </div>
                             </td>
-                          </tr>
+                                </tr>
+                              ))}
+                          </Fragment>
                         ))}
                       </tbody>
                     </table>
@@ -595,8 +679,21 @@ export default function App() {
                   </div>
 
                   <div className="mt-4 space-y-3 md:hidden">
-                    {shown.map(x => (
-                      <div
+                    {groupedShown.map(group => (
+                      <Fragment key={group.category}>
+                        <button
+                          onClick={() => toggleCategory(group.category)}
+                          className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-slate-50 p-4 text-left"
+                        >
+                          <span className="font-bold">{group.category}</span>
+                          <span className="text-xs text-slate-500">
+                            {group.items.length} • {money(group.total)}
+                          </span>
+                        </button>
+
+                        {!collapsedCategories[group.category] &&
+                          group.items.map(x => (
+                                                        <div
                         key={x.id}
                         className={`rounded-xl border p-4 ${
                           x.purchased
@@ -604,27 +701,27 @@ export default function App() {
                             : "border-emerald-100 bg-white"
                         }`}
                       >
-                        <div className="flex items-start gap-3">
+                              <div className="flex items-start gap-3">
                           <button onClick={() => toggle(x.id)}>
                             {x.purchased
                               ? <CheckCircle2 className="text-emerald-500" />
                               : <Circle className="text-slate-300" />}
                           </button>
 
-                          <div className="flex-1">
+                                <div className="flex-1">
                             <b className={x.purchased ? "line-through" : ""}>
                               {x.name}
                             </b>
-                            <div className="text-xs text-slate-400">
+                                  <div className="text-xs text-slate-400">
                               {x.category}
-                            </div>
-                          </div>
+                                  </div>
+                                </div>
 
                           <b>{money(x.quantity * x.unitPrice)}</b>
-                        </div>
+                              </div>
 
-                        <div className="mt-3 flex items-center justify-between border-t pt-3">
-                          <div className="inline-flex items-center rounded-lg border border-slate-200 bg-white">
+                              <div className="mt-3 flex items-center justify-between border-t pt-3">
+                                <div className="inline-flex items-center rounded-lg border border-slate-200 bg-white">
                             <button
                               onClick={() => changeQuantity(x.id, -1)}
                               className="p-2"
@@ -640,9 +737,9 @@ export default function App() {
                             >
                               <Plus size={15} />
                             </button>
-                          </div>
+                                </div>
 
-                          <div className="flex gap-2">
+                                <div className="flex gap-2">
                             <button
                               onClick={() => openEdit(x)}
                               className="inline-flex gap-1 px-3 py-2 text-xs"
@@ -657,9 +754,11 @@ export default function App() {
                               <Trash2 size={14} />
                               Excluir
                             </button>
-                          </div>
-                        </div>
-                      </div>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                      </Fragment>
                     ))}
 
                     {!shown.length && <Empty />}
