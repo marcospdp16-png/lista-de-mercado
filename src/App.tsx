@@ -149,6 +149,7 @@ export default function App() {
   const [historySearch, setHistorySearch] = useState("");
   const [historyMonth, setHistoryMonth] = useState("Todos");
   const [historyDetail, setHistoryDetail] = useState<PurchaseHistory | null>(null);
+  const [formError, setFormError] = useState("");
   const [monthlyBudget, setMonthlyBudget] = useState<number>(() => {
     try {
       return Number(localStorage.getItem(BUDGET_KEY)) || 1000;
@@ -400,6 +401,7 @@ export default function App() {
   }
 
   function openAdd() {
+    setFormError("");
     setEdit(null);
     setForm({
       name: "",
@@ -411,6 +413,7 @@ export default function App() {
   }
 
   function openEdit(x: Item) {
+    setFormError("");
     setEdit(x.id);
     setForm({
       name: x.name,
@@ -423,22 +426,50 @@ export default function App() {
 
   function save(e: React.FormEvent) {
     e.preventDefault();
-    if (!form.name.trim()) return;
 
-    const d = {
-      name: form.name.trim(),
-      category: detectedCategory,
-      quantity: Math.max(1, Number(form.quantity)),
-      unitPrice: Number(form.unitPrice) || 0
-    };
+    const cleanName = form.name.trim();
+    const quantity = Number(form.quantity);
+    const unitPrice = Number(form.unitPrice);
 
-    setItems(v =>
-      edit === null
-        ? [...v, { id: Date.now(), ...d, purchased: false }]
-        : v.map(x => x.id === edit ? { ...x, ...d } : x)
-    );
+    if (!cleanName) {
+      setFormError("Informe o nome do produto.");
+      return;
+    }
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setFormError("A quantidade deve ser maior que zero.");
+      return;
+    }
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+      setFormError("Informe um preço válido.");
+      return;
+    }
 
+    const detectedCategory = detectCategory(cleanName, form.category);
+
+    if (edit) {
+      setItems(v => v.map(x =>
+        x.id === edit
+          ? { ...x, name: cleanName, category: detectedCategory, quantity, unitPrice }
+          : x
+      ));
+    } else {
+      setItems(v => [
+        ...v,
+        {
+          id: Date.now(),
+          name: cleanName,
+          category: detectedCategory,
+          quantity,
+          unitPrice,
+          purchased: false,
+        },
+      ]);
+    }
+
+    setFormError("");
     setModal(false);
+    setEdit(null);
+    setForm({ name: "", category: "Outros", quantity: 1, unitPrice: 0 });
   }
 
   function del(id: number) {
@@ -509,7 +540,7 @@ export default function App() {
             </div>
             <div>
               <b>Lista de Mercado</b>
-              <div className="text-xs text-slate-400">versão 1.1.0</div>
+              <div className="text-xs text-slate-400">versão 1.1.1</div>
             </div>
             <button
               className="ml-auto lg:hidden"
@@ -576,6 +607,20 @@ export default function App() {
         <section className="mx-auto max-w-7xl p-4 sm:p-8">
           {page === "Dashboard" ? (
             <>
+              {shoppingMode && (
+                <div className="mb-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                  <div className="flex items-center gap-3">
+                    <ShoppingCart className="text-emerald-600" size={22} />
+                    <div>
+                      <p className="font-bold text-emerald-800">Modo Compras ativo</p>
+                      <p className="text-sm text-emerald-700">
+                        Mostrando apenas os produtos que ainda faltam comprar.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="mb-7">
                 <p className="mb-1 text-sm font-medium text-emerald-600">
                   Boa tarde! 👋
