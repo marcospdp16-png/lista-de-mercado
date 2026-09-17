@@ -20,7 +20,16 @@ type Item = {
 
 type Filter = "Todos" | "Pendentes" | "Comprados";
 
+type PurchaseHistory = {
+  id: number;
+  date: string;
+  total: number;
+  itemCount: number;
+  items: Item[];
+};
+
 const KEY = "lista-mercado-items-v1";
+const HISTORY_KEY = "lista-mercado-history-v1";
 
 const categories = [
   "Alimentos", "Laticínios", "Hortifruti", "Higiene", "Limpeza",
@@ -111,6 +120,14 @@ const money = (n: number) =>
   n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
 export default function App() {
+  const [history, setHistory] = useState<PurchaseHistory[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+    } catch {
+      return [];
+    }
+  });
+
   const [items, setItems] = useState<Item[]>(() => {
     try {
       return JSON.parse(localStorage.getItem(KEY) || "null") || initial;
@@ -142,6 +159,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(KEY, JSON.stringify(items));
   }, [items]);
+
+  useEffect(() => {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  }, [history]);
 
   const bought = items.filter(x => x.purchased).length;
   const pending = items.length - bought;
@@ -226,6 +247,7 @@ export default function App() {
     ["Dashboard", LayoutDashboard],
     ["Lista de Compras", ClipboardList],
     ["Categorias", Tags],
+    ["Histórico", ListChecks],
     ["Configurações", Settings]
   ] as const;
 
@@ -295,6 +317,25 @@ export default function App() {
     }
   }
 
+  function finalizePurchase() {
+    const purchasedItems = items.filter(x => x.purchased);
+    if (!purchasedItems.length) return;
+
+    const purchase: PurchaseHistory = {
+      id: Date.now(),
+      date: new Date().toISOString(),
+      total: purchasedItems.reduce(
+        (sum, item) => sum + item.quantity * item.unitPrice,
+        0
+      ),
+      itemCount: purchasedItems.reduce((sum, item) => sum + item.quantity, 0),
+      items: purchasedItems
+    };
+
+    setHistory(v => [purchase, ...v]);
+    setItems(v => v.filter(x => !x.purchased));
+  }
+
   function clearPurchased() {
     if (!bought) return;
     if (confirm(`Remover ${bought} item(ns) já comprado(s) da lista?`)) {
@@ -336,7 +377,7 @@ export default function App() {
             </div>
             <div>
               <b>Lista de Mercado</b>
-              <div className="text-xs text-slate-400">versão 1.0.7</div>
+              <div className="text-xs text-slate-400">versão 1.0.8</div>
             </div>
             <button
               className="ml-auto lg:hidden"
@@ -471,13 +512,23 @@ export default function App() {
                     </button>
 
                     {bought > 0 && (
-                      <button
-                        onClick={clearPurchased}
-                        className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-200 px-4 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50"
-                      >
-                        <Trash2 size={18} />
-                        Limpar comprados
-                      </button>
+                      <>
+                        <button
+                          onClick={finalizePurchase}
+                          className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700"
+                        >
+                          <CheckCircle2 size={18} />
+                          Finalizar compra
+                        </button>
+
+                        <button
+                          onClick={clearPurchased}
+                          className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-200 px-4 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50"
+                        >
+                          <Trash2 size={18} />
+                          Limpar comprados
+                        </button>
+                      </>
                     )}
 
                     <button
@@ -768,7 +819,91 @@ export default function App() {
             </>
           ) : (
             <div className="mx-auto max-w-5xl">
-              {page === "Categorias" ? (
+              {page === "Histórico" ? (
+                <>
+                  <div className="mb-7">
+                    <p className="text-sm font-medium text-emerald-600">
+                      Histórico de compras
+                    </p>
+                    <h1 className="text-3xl font-bold">Compras anteriores</h1>
+                    <p className="mt-2 text-slate-500">
+                      Consulte compras finalizadas e os valores registrados.
+                    </p>
+                  </div>
+
+                  <div className="mb-5 grid gap-4 sm:grid-cols-3">
+                    <SummaryCard
+                      title="Compras registradas"
+                      value={String(history.length)}
+                      subtitle="Histórico local"
+                    />
+                    <SummaryCard
+                      title="Total histórico"
+                      value={money(history.reduce((sum, p) => sum + p.total, 0))}
+                      subtitle="Soma das compras"
+                    />
+                    <SummaryCard
+                      title="Itens registrados"
+                      value={String(history.reduce((sum, p) => sum + p.itemCount, 0))}
+                      subtitle="Quantidade de produtos"
+                    />
+                  </div>
+
+                  {history.length === 0 ? (
+                    <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center shadow-sm">
+                      <ListChecks className="mx-auto mb-4 text-slate-300" size={48} />
+                      <h2 className="font-bold">Nenhuma compra finalizada</h2>
+                      <p className="mt-2 text-sm text-slate-400">
+                        Quando você finalizar uma compra, ela aparecerá aqui.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {history.map(purchase => (
+                        <div
+                          key={purchase.id}
+                          className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+                        >
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                              <h2 className="font-bold">
+                                Compra de{" "}
+                                {new Date(purchase.date).toLocaleDateString("pt-BR")}
+                              </h2>
+                              <p className="text-sm text-slate-400">
+                                {purchase.itemCount} item(ns)
+                              </p>
+                            </div>
+                            <b className="text-xl text-emerald-600">
+                              {money(purchase.total)}
+                            </b>
+                          </div>
+
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            {purchase.items.map(item => (
+                              <span
+                                key={item.id}
+                                className="rounded-full bg-slate-100 px-3 py-1.5 text-xs text-slate-600"
+                              >
+                                {item.name} × {item.quantity}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <button
+                    onClick={() => setPage("Dashboard")}
+                    className="mt-6 rounded-xl bg-emerald-500 px-4 py-2.5 font-semibold text-white"
+                  >
+                    Voltar ao Dashboard
+                  </button>
+                </>
+              ) : (
+                <>
+                  {page === "Categorias" ? (
                 <>
                   <div className="mb-7">
                     <p className="text-sm font-medium text-emerald-600">
@@ -829,6 +964,8 @@ export default function App() {
                     </button>
                   </div>
                 </div>
+                    )}
+                </>
               )}
             </div>
           )}
