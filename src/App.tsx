@@ -30,6 +30,7 @@ type PurchaseHistory = {
 
 const KEY = "lista-mercado-items-v1";
 const HISTORY_KEY = "lista-mercado-history-v1";
+const BUDGET_KEY = "lista-mercado-budget-v1";
 
 const categories = [
   "Alimentos", "Laticínios", "Hortifruti", "Higiene", "Limpeza",
@@ -148,6 +149,13 @@ export default function App() {
   const [historySearch, setHistorySearch] = useState("");
   const [historyMonth, setHistoryMonth] = useState("Todos");
   const [historyDetail, setHistoryDetail] = useState<PurchaseHistory | null>(null);
+  const [monthlyBudget, setMonthlyBudget] = useState<number>(() => {
+    try {
+      return Number(localStorage.getItem(BUDGET_KEY)) || 1000;
+    } catch {
+      return 1000;
+    }
+  });
   const [form, setForm] = useState({
     name: "",
     category: "Alimentos",
@@ -166,6 +174,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
   }, [history]);
+
+  useEffect(() => {
+    localStorage.setItem(BUDGET_KEY, String(monthlyBudget));
+  }, [monthlyBudget]);
 
   const bought = items.filter(x => x.purchased).length;
   const pending = items.length - bought;
@@ -294,11 +306,80 @@ export default function App() {
     }));
   }
 
+  const currentMonthKey = new Date().toLocaleDateString("pt-BR", {
+    month: "2-digit",
+    year: "numeric"
+  });
+
+  const currentMonthHistory = history.filter(p =>
+    new Date(p.date).toLocaleDateString("pt-BR", {
+      month: "2-digit",
+      year: "numeric"
+    }) === currentMonthKey
+  );
+
+  const currentMonthSpent = currentMonthHistory.reduce(
+    (sum, purchase) => sum + purchase.total,
+    0
+  );
+
+  const budgetRemaining = Math.max(0, monthlyBudget - currentMonthSpent);
+  const budgetPercent = monthlyBudget > 0
+    ? Math.min(100, (currentMonthSpent / monthlyBudget) * 100)
+    : 0;
+
+  const categorySpending = useMemo(() => {
+    const totals: Record<string, number> = {};
+
+    currentMonthHistory.forEach(purchase => {
+      purchase.items.forEach(item => {
+        totals[item.category] =
+          (totals[item.category] || 0) + item.quantity * item.unitPrice;
+      });
+    });
+
+    return Object.entries(totals)
+      .map(([category, value]) => ({ category, value }))
+      .sort((a, b) => b.value - a.value);
+  }, [currentMonthHistory]);
+
+  const monthSpending = useMemo(() => {
+    const totals: Record<string, number> = {};
+
+    history.forEach(purchase => {
+      const key = new Date(purchase.date).toLocaleDateString("pt-BR", {
+        month: "2-digit",
+        year: "numeric"
+      });
+      totals[key] = (totals[key] || 0) + purchase.total;
+    });
+
+    return Object.entries(totals)
+      .map(([month, value]) => ({ month, value }))
+      .sort((a, b) => {
+        const [am, ay] = a.month.split("/").map(Number);
+        const [bm, by] = b.month.split("/").map(Number);
+        return new Date(by, bm - 1).getTime() - new Date(ay, am - 1).getTime();
+      })
+      .slice(0, 6)
+      .reverse();
+  }, [history]);
+
+  const averageCurrentPurchase = currentMonthHistory.length
+    ? currentMonthSpent / currentMonthHistory.length
+    : 0;
+
+  const currentMonthItems = currentMonthHistory.reduce(
+    (sum, purchase) => sum + purchase.itemCount,
+    0
+  );
+
   const nav = [
     ["Dashboard", LayoutDashboard],
     ["Lista de Compras", ClipboardList],
     ["Categorias", Tags],
     ["Histórico", ListChecks],
+    ["Orçamento", BarChart3],
     ["Configurações", Settings]
   ] as const;
 
@@ -428,7 +509,7 @@ export default function App() {
             </div>
             <div>
               <b>Lista de Mercado</b>
-              <div className="text-xs text-slate-400">versão 1.0.9</div>
+              <div className="text-xs text-slate-400">versão 1.1.0</div>
             </div>
             <button
               className="ml-auto lg:hidden"
@@ -503,27 +584,37 @@ export default function App() {
                   Sua lista de mercado
                 </h1>
                 <p className="mt-2 text-slate-500">
-                  Aqui está o resumo das suas compras.
+                  Aqui está o resumo da sua lista atual.
                 </p>
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                <Stat icon={<ShoppingCart />} title="Itens" value={String(items.length)} />
-                <Stat icon={<Circle />} title="Pendentes" value={String(pending)} />
-                <Stat icon={<CheckCircle2 />} title="Comprados" value={String(bought)} />
-                <Stat icon={<BarChart3 />} title="Total estimado" value={money(total)} />
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <Stat
+                  icon={<ShoppingCart />}
+                  title="Itens na lista"
+                  value={String(items.length)}
+                />
+                <Stat
+                  icon={<Circle />}
+                  title="Pendentes"
+                  value={String(pending)}
+                />
+                <Stat
+                  icon={<CheckCircle2 />}
+                  title="Comprados"
+                  value={String(bought)}
+                />
+                <Stat
+                  icon={<BarChart3 />}
+                  title="Total estimado"
+                  value={money(total)}
+                />
               </div>
 
-              <div className="mt-7 grid gap-4 md:grid-cols-3">
-                <SummaryCard title="A comprar" value={money(pendingTotal)} subtitle={`${pending} item(ns) pendente(s)`} />
-                <SummaryCard title="Já comprado" value={money(boughtTotal)} subtitle={`${bought} item(ns) comprado(s)`} />
-                <SummaryCard title="Total da lista" value={money(total)} subtitle={`${items.length} item(ns) no total`} />
-              </div>
-
-              <div className="mt-7 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <h2 className="font-bold">Progresso das compras</h2>
+                    <h2 className="font-bold">Progresso da lista</h2>
                     <p className="text-sm text-slate-400">
                       {bought} de {items.length} item(ns) comprados
                     </p>
@@ -532,10 +623,13 @@ export default function App() {
                     {items.length ? Math.round((bought / items.length) * 100) : 0}%
                   </span>
                 </div>
+
                 <div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-100">
                   <div
                     className="h-full rounded-full bg-emerald-500 transition-all"
-                    style={{ width: `${items.length ? (bought / items.length) * 100 : 0}%` }}
+                    style={{
+                      width: `${items.length ? (bought / items.length) * 100 : 0}%`
+                    }}
                   />
                 </div>
               </div>
@@ -1011,6 +1105,179 @@ export default function App() {
                 </>
               ) : (
                 <>
+                  {page === "Orçamento" ? (
+                    <>
+                      <div className="mb-7">
+                        <p className="text-sm font-medium text-emerald-600">
+                          Controle financeiro
+                        </p>
+                        <h1 className="text-3xl font-bold">Orçamento mensal</h1>
+                        <p className="mt-2 text-slate-500">
+                          Defina quanto pretende gastar com supermercado por mês.
+                        </p>
+                      </div>
+
+                      <div className="grid gap-5 lg:grid-cols-2">
+                        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                          <h2 className="font-bold">Limite mensal</h2>
+                          <p className="mt-1 text-sm text-slate-400">
+                            Esse valor fica salvo localmente neste navegador.
+                          </p>
+
+                          <label className="mt-5 block text-sm font-medium">
+                            Orçamento
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={monthlyBudget}
+                              onChange={e => setMonthlyBudget(Math.max(0, Number(e.target.value) || 0))}
+                              className="mt-1.5 w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-emerald-400"
+                            />
+                          </label>
+
+                          <div className="mt-5 rounded-xl bg-slate-50 p-4">
+                            <div className="flex justify-between text-sm">
+                              <span className="text-slate-500">Gasto atual</span>
+                              <b>{money(currentMonthSpent)}</b>
+                            </div>
+                            <div className="mt-2 flex justify-between text-sm">
+                              <span className="text-slate-500">Disponível</span>
+                              <b className="text-emerald-600">{money(budgetRemaining)}</b>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                          <h2 className="font-bold">Situação do mês</h2>
+                          <div className="mt-5 text-center">
+                            <div className="text-5xl font-bold text-emerald-600">
+                              {Math.round(budgetPercent)}%
+                            </div>
+                            <p className="mt-2 text-sm text-slate-400">
+                              do orçamento utilizado
+                            </p>
+                          </div>
+
+                          <div className="mt-5 h-4 overflow-hidden rounded-full bg-slate-100">
+                            <div
+                              className="h-full rounded-full bg-emerald-500"
+                              style={{ width: `${budgetPercent}%` }}
+                            />
+                          </div>
+
+                          {budgetPercent >= 100 ? (
+                            <div className="mt-4 rounded-xl bg-red-50 p-4 text-sm text-red-700">
+                              ⚠️ O orçamento mensal foi atingido.
+                            </div>
+                          ) : budgetPercent >= 80 ? (
+                            <div className="mt-4 rounded-xl bg-amber-50 p-4 text-sm text-amber-700">
+                              ⚠️ Atenção: você está próximo do limite mensal.
+                            </div>
+                          ) : (
+                            <div className="mt-4 rounded-xl bg-emerald-50 p-4 text-sm text-emerald-700">
+                              ✓ Dentro do orçamento mensal.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="mt-6 grid gap-5 lg:grid-cols-2">
+                        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                          <div className="mb-5">
+                            <h2 className="text-lg font-bold">Gastos por categoria</h2>
+                            <p className="mt-1 text-sm text-slate-400">
+                              Distribuição dos gastos em {currentMonthKey}
+                            </p>
+                          </div>
+
+                          {categorySpending.length === 0 ? (
+                            <div className="py-8 text-center text-sm text-slate-400">
+                              Ainda não há compras registradas neste mês.
+                            </div>
+                          ) : (
+                            <div className="space-y-4">
+                              {categorySpending.map(row => {
+                                const percent = currentMonthSpent
+                                  ? (row.value / currentMonthSpent) * 100
+                                  : 0;
+
+                                return (
+                                  <div key={row.category}>
+                                    <div className="mb-1.5 flex items-center justify-between text-sm">
+                                      <span className="font-medium">{row.category}</span>
+                                      <span className="font-semibold">
+                                        {money(row.value)}
+                                      </span>
+                                    </div>
+                                    <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+                                      <div
+                                        className="h-full rounded-full bg-emerald-500 transition-all"
+                                        style={{ width: `${percent}%` }}
+                                      />
+                                    </div>
+                                    <div className="mt-1 text-xs text-slate-400">
+                                      {Math.round(percent)}% do total mensal
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                          <div className="mb-5">
+                            <h2 className="text-lg font-bold">Evolução mensal</h2>
+                            <p className="mt-1 text-sm text-slate-400">
+                              Gastos dos últimos meses registrados
+                            </p>
+                          </div>
+
+                          {monthSpending.length === 0 ? (
+                            <div className="py-8 text-center text-sm text-slate-400">
+                              O histórico mensal aparecerá após finalizar compras.
+                            </div>
+                          ) : (
+                            <div className="space-y-4">
+                              {monthSpending.map(row => {
+                                const max = Math.max(
+                                  ...monthSpending.map(x => x.value),
+                                  1
+                                );
+                                const percent = (row.value / max) * 100;
+
+                                return (
+                                  <div key={row.month}>
+                                    <div className="mb-1.5 flex items-center justify-between text-sm">
+                                      <span className="font-medium">{row.month}</span>
+                                      <span className="font-semibold">
+                                        {money(row.value)}
+                                      </span>
+                                    </div>
+                                    <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+                                      <div
+                                        className="h-full rounded-full bg-emerald-500 transition-all"
+                                        style={{ width: `${percent}%` }}
+                                      />
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => setPage("Dashboard")}
+                        className="mt-6 rounded-xl bg-emerald-500 px-4 py-2.5 font-semibold text-white"
+                      >
+                        Voltar ao Dashboard
+                      </button>
+                    </>
+                  ) : (
+                    <>
                   {page === "Categorias" ? (
                 <>
                   <div className="mb-7">
@@ -1073,6 +1340,8 @@ export default function App() {
                   </div>
                 </div>
                     )}
+                </>
+              )}
                 </>
               )}
             </div>
