@@ -1,6 +1,5 @@
-// Lista de Mercado v1.2.0.5
-// Preparação da integração Supabase: identidade anônima e identificação da lista.
-// Mantém localStorage como persistência local/offline; sincronização dos dados será implementada nas próximas etapas.
+// Lista de Mercado v1.2.0.8
+// Sincronização da Lista de Compras com Supabase, mantendo localStorage como cache/offline.
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { supabase } from "./lib/supabase";
@@ -12,6 +11,8 @@ import {
 
 type Item = {
   id: number;
+  cloudId?: string;
+  updatedAt?: string;
   name: string;
   category: string;
   quantity: number;
@@ -23,6 +24,7 @@ type Filter = "Todos" | "Pendentes" | "Comprados";
 
 type PurchaseHistory = {
   id: number;
+  cloudId?: string;
   date: string;
   total: number;
   itemCount: number;
@@ -34,6 +36,7 @@ const HISTORY_KEY = "lista-mercado-history-v1";
 const BUDGET_KEY = "lista-mercado-budget-v1";
 const SYNC_LIST_ID_KEY = "lista-mercado-sync-list-id-v1";
 const SYNC_CODE_KEY = "lista-mercado-sync-code-v1";
+const SYNC_LAST_SYNC_KEY = "lista-mercado-sync-last-v1";
 
 type SyncStatus = "inicializando" | "sincronizado" | "offline" | "erro";
 
@@ -171,6 +174,10 @@ export default function App() {
   const [linkCode, setLinkCode] = useState<string>(() =>
     localStorage.getItem(SYNC_CODE_KEY) || ""
   );
+  const [linkCodeInput, setLinkCodeInput] = useState("");
+  const [syncMessage, setSyncMessage] = useState("");
+  const [syncingItems, setSyncingItems] = useState(false);
+  const [syncingHistory, setSyncingHistory] = useState(false);
 
   const [form, setForm] = useState({
     name: "",
@@ -183,6 +190,283 @@ export default function App() {
   const categoryWasDetected =
     Boolean(form.name.trim()) && detectedCategory !== "Outros";
 
+
+  function nextLocalId(existing: Item[]) {
+    const maxId = existing.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0);
+    return maxId + 1;
+  }
+
+  function withUpdatedAt(item: Item): Item {
+    return { ...item, updatedAt: new Date().toISOString() };
+  }
+
+  async function pushItemsToCloud(currentItems: Item[], targetListId = listId) {
+    if (!targetListId) return currentItems;
+
+    const payload = currentItems.map(item => ({
+      id: item.cloudId,
+      lista_id: targetListId,
+      nome: item.name,
+      categoria: item.category,
+      quantidade: item.quantity,
+      preco_unitario: item.unitPrice,
+      comprado: item.purchased,
+      ...(item.updatedAt ? { updated_at: item.updatedAt } : {})
+    }));
+
+    const toInsert = payload.filter(item => !item.id).map(({ id: _id, ...item }) => item);
+    const toUpdate = payload.filter(item => Boolean(item.id));
+
+    const inserted: { id: string; lista_id: string; nome: string; categoria: string; quantidade: number; preco_unitario: number; comprado: boolean; updated_at: string }[] = [];
+
+    if (toInsert.length) {
+      const { data, error } = await supabase
+        .from("itens")
+        .insert(toInsert)
+        .select("id, lista_id, nome, categoria, quantidade, preco_unitario, comprado, updated_at");
+      if (error) throw error;
+      inserted.push(...(data || []));
+    }
+
+    for (const item of toUpdate) {
+      const { error } = await supabase
+        .from("itens")
+        .update({
+          nome: item.nome,
+          categoria: item.categoria,
+          quantidade: item.quantidade,
+          preco_unitario: item.preco_unitario,
+          comprado: item.comprado,
+          ...(item.updated_at ? { updated_at: item.updated_at } : {})
+        })
+        .eq("id", item.id)
+        .eq("lista_id", targetListId);
+      if (error) throw error;
+    }
+
+    if (inserted.length) {
+      let insertedIndex = 0;
+      return currentItems.map(item => {
+        if (item.cloudId) return item;
+        const remote = inserted[insertedIndex++];
+        return remote
+          ? { ...item, cloudId: remote.id, updatedAt: remote.updated_at || item.updatedAt }
+          : item;
+      });
+    }
+
+    return currentItems;
+  }
+
+  async function pullItemsFromCloud() {
+    if (!listId) return [];
+
+    const { data, error } = await supabase
+      .from("itens")
+      .select("id, lista_id, nome, categoria, quantidade, preco_unitario, comprado, updated_at")
+      .eq("lista_id", listId)
+      .order("created_at", { ascending: true });
+
+    if (error) throw error;
+
+    return (data || []).map((row: any, index: number) => ({
+      id: nextLocalId([]) + index,
+      cloudId: row.id,
+      updatedAt: row.updated_at,
+      name: row.nome,
+      category: row.categoria,
+      quantity: Number(row.quantidade),
+      unitPrice: Number(row.preco_unitario),
+      purchased: Boolean(row.comprado)
+    })) as Item[];
+  }
+
+  function historySignature(purchase: PurchaseHistory) {
+    return [
+      purchase.date,
+      Number(purchase.total).toFixed(2),
+      purchase.itemCount,
+      purchase.items.map(item => `${item.name}|${item.quantity}|${Number(item.unitPrice).toFixed(2)}`).join("||")
+    ].join("::");
+  }
+
+  async function pullHistoryFromCloud(targetListId = listId) {
+    if (!targetListId) return [];
+
+    const { data, error } = await supabase
+      .from("historico_compras")
+      .select("id, lista_id, data_compra, total, quantidade_itens, itens, created_at")
+      .eq("lista_id", targetListId)
+      .order("data_compra", { ascending: false });
+
+    if (error) throw error;
+
+    return (data || []).map((row: any, index: number) => {
+      const rawItems = Array.isArray(row.itens) ? row.itens : [];
+      const purchaseItems = rawItems.map((item: any, itemIndex: number) => ({
+        id: Number(item.id) || (Date.now() + index + itemIndex),
+        cloudId: item.cloudId,
+        updatedAt: item.updatedAt,
+        name: String(item.name || item.nome || ""),
+        category: String(item.category || item.categoria || "Outros"),
+        quantity: Number(item.quantity ?? item.quantidade ?? 1),
+        unitPrice: Number(item.unitPrice ?? item.preco_unitario ?? 0),
+        purchased: true
+      })) as Item[];
+
+      return {
+        id: Date.now() + index,
+        cloudId: String(row.id),
+        date: String(row.data_compra),
+        total: Number(row.total),
+        itemCount: Number(row.quantidade_itens),
+        items: purchaseItems
+      };
+    }) as PurchaseHistory[];
+  }
+
+  async function pushHistoryToCloud(currentHistory: PurchaseHistory[], targetListId = listId) {
+    if (!targetListId) return currentHistory;
+
+    const inserted: { id: string; data_compra: string; total: number; quantidade_itens: number; itens: any[] }[] = [];
+
+    for (const purchase of currentHistory) {
+      const payload = {
+        lista_id: targetListId,
+        data_compra: purchase.date,
+        total: purchase.total,
+        quantidade_itens: purchase.itemCount,
+        itens: purchase.items
+      };
+
+      if (purchase.cloudId) {
+        const { error } = await supabase
+          .from("historico_compras")
+          .update(payload)
+          .eq("id", purchase.cloudId)
+          .eq("lista_id", targetListId);
+
+        if (error) throw error;
+      } else {
+        const { data, error } = await supabase
+          .from("historico_compras")
+          .insert(payload)
+          .select("id, data_compra, total, quantidade_itens, itens")
+          .single();
+
+        if (error) throw error;
+        if (data) inserted.push(data);
+      }
+    }
+
+    if (!inserted.length) return currentHistory;
+
+    let insertIndex = 0;
+    return currentHistory.map(purchase => {
+      if (purchase.cloudId) return purchase;
+      const remote = inserted[insertIndex++];
+      return remote
+        ? { ...purchase, cloudId: String(remote.id) }
+        : purchase;
+    });
+  }
+
+  async function deleteCloudHistory(cloudId?: string) {
+    if (!cloudId || !listId) return;
+
+    const { error } = await supabase
+      .from("historico_compras")
+      .delete()
+      .eq("id", cloudId)
+      .eq("lista_id", listId);
+
+    if (error) throw error;
+  }
+
+  async function synchronizeHistory(preferLocal = false, targetListId = listId) {
+    if (!targetListId) return;
+
+    setSyncingHistory(true);
+
+    try {
+      const localHistory = history;
+      const cloudHistory = await pullHistoryFromCloud(targetListId);
+
+      if (cloudHistory.length === 0 && preferLocal && localHistory.length > 0) {
+        const uploaded = await pushHistoryToCloud(localHistory, targetListId);
+        setHistory(uploaded);
+      } else {
+        const cloudSignatures = new Set(cloudHistory.map(historySignature));
+        const localWithoutCloud = localHistory.filter(
+          purchase => !purchase.cloudId && !cloudSignatures.has(historySignature(purchase))
+        );
+
+        let uploadedLocal: PurchaseHistory[] = [];
+        if (localWithoutCloud.length > 0) {
+          uploadedLocal = await pushHistoryToCloud(localWithoutCloud, targetListId);
+        }
+
+        const localUploadedBySignature = new Map(
+          uploadedLocal.map(purchase => [historySignature(purchase), purchase])
+        );
+
+        const mergedLocal = localHistory
+          .filter(purchase => !purchase.cloudId)
+          .map(purchase => localUploadedBySignature.get(historySignature(purchase)) || purchase);
+
+        const merged = [
+          ...cloudHistory,
+          ...mergedLocal.filter(
+            purchase => !cloudSignatures.has(historySignature(purchase))
+          )
+        ].sort(
+          (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+        );
+
+        setHistory(merged);
+      }
+    } finally {
+      setSyncingHistory(false);
+    }
+  }
+
+  async function synchronizeItems(preferLocal = false) {
+    if (!listId) return;
+
+    setSyncingItems(true);
+    setSyncMessage("");
+
+    try {
+      const localItems = items;
+      const cloudItems = await pullItemsFromCloud();
+
+      if (cloudItems.length === 0 && preferLocal && localItems.length > 0) {
+        const normalized = localItems.map(withUpdatedAt);
+        const uploaded = await pushItemsToCloud(normalized);
+        setItems(uploaded);
+      } else {
+        const localByCloudId = new Map(localItems.filter(x => x.cloudId).map(x => [x.cloudId!, x]));
+        const merged = cloudItems.map(remote => {
+          const local = localByCloudId.get(remote.cloudId);
+          if (local && local.updatedAt && remote.updatedAt && local.updatedAt > remote.updatedAt) {
+            return local;
+          }
+          return remote;
+        });
+        setItems(merged);
+      }
+
+      localStorage.setItem(SYNC_LAST_SYNC_KEY, new Date().toISOString());
+      setSyncStatus("sincronizado");
+      setSyncMessage("Lista sincronizada com a nuvem.");
+    } catch (error) {
+      console.error("Erro ao sincronizar itens:", error);
+      setSyncStatus(navigator.onLine ? "erro" : "offline");
+      setSyncError(error instanceof Error ? error.message : "Não foi possível sincronizar a lista.");
+    } finally {
+      setSyncingItems(false);
+    }
+  }
 
   useEffect(() => {
     let active = true;
@@ -212,9 +496,24 @@ export default function App() {
           throw new Error("Não foi possível iniciar a sessão anônima.");
         }
 
-        const { data, error } = await supabase.rpc(
-          "obter_ou_criar_lista"
-        );
+        // Se este navegador já possui um código salvo, tenta recuperar
+        // automaticamente a mesma lista antes de criar uma nova identidade/lista.
+        // Isso evita pedir o código novamente quando a sessão anônima precisar ser renovada.
+        const savedCode = localStorage.getItem(SYNC_CODE_KEY) || "";
+        let data: any;
+        let error: any;
+
+        if (savedCode) {
+          const result = await supabase.rpc("vincular_dispositivo_por_codigo", {
+            p_codigo: savedCode
+          });
+          data = result.data;
+          error = result.error;
+        } else {
+          const result = await supabase.rpc("obter_ou_criar_lista");
+          data = result.data;
+          error = result.error;
+        }
 
         if (error) throw error;
 
@@ -237,7 +536,52 @@ export default function App() {
           localStorage.setItem(SYNC_CODE_KEY, nextCode);
         }
 
-        setSyncStatus("sincronizado");
+        // Primeira sincronização: se a lista na nuvem já tiver itens, eles entram neste dispositivo.
+        // Se a nuvem estiver vazia e este navegador já possuir dados, os dados locais são enviados.
+        const hadLocalItems = localStorage.getItem(KEY) !== null;
+        try {
+          const { data: cloudRows, error: cloudError } = await supabase
+            .from("itens")
+            .select("id")
+            .eq("lista_id", nextListId);
+          if (cloudError) throw cloudError;
+
+          if (cloudRows && cloudRows.length > 0) {
+            const { data: fullRows, error: fullError } = await supabase
+              .from("itens")
+              .select("id, lista_id, nome, categoria, quantidade, preco_unitario, comprado, updated_at")
+              .eq("lista_id", nextListId)
+              .order("created_at", { ascending: true });
+            if (fullError) throw fullError;
+
+            const remoteItems = (fullRows || []).map((row: any, index: number) => ({
+              id: Date.now() + index,
+              cloudId: row.id,
+              updatedAt: row.updated_at,
+              name: row.nome,
+              category: row.categoria,
+              quantity: Number(row.quantidade),
+              unitPrice: Number(row.preco_unitario),
+              purchased: Boolean(row.comprado)
+            })) as Item[];
+            setItems(remoteItems);
+          } else if (hadLocalItems) {
+            const localRaw = localStorage.getItem(KEY);
+            const localItems = localRaw ? JSON.parse(localRaw) as Item[] : [];
+            const normalized = localItems.map(withUpdatedAt);
+            const uploaded = await pushItemsToCloud(normalized, nextListId);
+            setItems(uploaded);
+          }
+
+          await synchronizeHistory(true, nextListId);
+
+          localStorage.setItem(SYNC_LAST_SYNC_KEY, new Date().toISOString());
+          setSyncStatus("sincronizado");
+        } catch (syncError) {
+          console.error("Erro na sincronização inicial dos itens:", syncError);
+          setSyncError(syncError instanceof Error ? syncError.message : "Não foi possível sincronizar os itens.");
+          setSyncStatus("erro");
+        }
       } catch (error) {
         console.error("Erro ao inicializar o Supabase:", error);
 
@@ -264,8 +608,49 @@ export default function App() {
   }, [items]);
 
   useEffect(() => {
+    if (syncStatus !== "sincronizado" || !listId || !items.length) return;
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const normalized = items.map(item => item.updatedAt ? item : withUpdatedAt(item));
+        const uploaded = await pushItemsToCloud(normalized);
+        if (JSON.stringify(uploaded) !== JSON.stringify(items)) {
+          setItems(uploaded);
+        }
+        localStorage.setItem(SYNC_LAST_SYNC_KEY, new Date().toISOString());
+        setSyncMessage("Lista sincronizada com a nuvem.");
+      } catch (error) {
+        console.error("Erro ao enviar alterações para a nuvem:", error);
+        setSyncStatus(navigator.onLine ? "erro" : "offline");
+        setSyncError(error instanceof Error ? error.message : "Não foi possível enviar as alterações.");
+      }
+    }, 500);
+
+    return () => window.clearTimeout(timer);
+  }, [items, listId, syncStatus]);
+
+  useEffect(() => {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
   }, [history]);
+
+  useEffect(() => {
+    if (syncStatus !== "sincronizado" || !listId) return;
+
+    const timer = window.setTimeout(async () => {
+      try {
+        const uploaded = await pushHistoryToCloud(history);
+        if (JSON.stringify(uploaded) !== JSON.stringify(history)) {
+          setHistory(uploaded);
+        }
+      } catch (error) {
+        console.error("Erro ao enviar histórico para a nuvem:", error);
+        setSyncStatus(navigator.onLine ? "erro" : "offline");
+        setSyncError(error instanceof Error ? error.message : "Não foi possível sincronizar o histórico.");
+      }
+    }, 500);
+
+    return () => window.clearTimeout(timer);
+  }, [history, listId, syncStatus]);
 
   useEffect(() => {
     localStorage.setItem(BUDGET_KEY, String(monthlyBudget));
@@ -384,10 +769,21 @@ export default function App() {
     ? filteredHistoryTotal / filteredHistory.length
     : 0;
 
-  function deleteHistory(id: number) {
-    if (confirm("Excluir este registro do histórico?")) {
+  async function deleteHistory(id: number) {
+    if (!confirm("Excluir este registro do histórico?")) return;
+
+    const purchase = history.find(p => p.id === id);
+
+    try {
+      if (purchase?.cloudId) {
+        await deleteCloudHistory(purchase.cloudId);
+      }
+
       setHistory(v => v.filter(p => p.id !== id));
       if (historyDetail?.id === id) setHistoryDetail(null);
+    } catch (error) {
+      console.error("Erro ao excluir histórico na nuvem:", error);
+      setSyncError(error instanceof Error ? error.message : "Não foi possível excluir o histórico na nuvem.");
     }
   }
 
@@ -477,7 +873,7 @@ export default function App() {
 
   function toggle(id: number) {
     setItems(v =>
-      v.map(x => x.id === id ? { ...x, purchased: !x.purchased } : x)
+      v.map(x => x.id === id ? withUpdatedAt({ ...x, purchased: !x.purchased }) : x)
     );
   }
 
@@ -485,7 +881,7 @@ export default function App() {
     setItems(v =>
       v.map(x =>
         x.id === id
-          ? { ...x, quantity: Math.max(1, x.quantity + delta) }
+          ? withUpdatedAt({ ...x, quantity: Math.max(1, x.quantity + delta) })
           : x
       )
     );
@@ -540,7 +936,7 @@ export default function App() {
     if (edit) {
       setItems(v => v.map(x =>
         x.id === edit
-          ? { ...x, name: cleanName, category: detectedCategory, quantity, unitPrice }
+          ? withUpdatedAt({ ...x, name: cleanName, category: detectedCategory, quantity, unitPrice })
           : x
       ));
     } else {
@@ -553,6 +949,7 @@ export default function App() {
           quantity,
           unitPrice,
           purchased: false,
+          updatedAt: new Date().toISOString(),
         },
       ]);
     }
@@ -563,10 +960,21 @@ export default function App() {
     setForm({ name: "", category: "Outros", quantity: 1, unitPrice: 0 });
   }
 
+  async function deleteCloudItem(cloudId?: string) {
+    if (!cloudId || !listId) return;
+    try {
+      const { error } = await supabase.from("itens").delete().eq("id", cloudId).eq("lista_id", listId);
+      if (error) throw error;
+    } catch (error) {
+      console.error("Erro ao excluir item na nuvem:", error);
+    }
+  }
+
   function del(id: number) {
     const x = items.find(i => i.id === id);
 
     if (x && confirm(`Excluir "${x.name}" da lista?`)) {
+      void deleteCloudItem(x.cloudId);
       setItems(v => v.filter(i => i.id !== id));
     }
   }
@@ -586,14 +994,79 @@ export default function App() {
       items: purchasedItems
     };
 
+    purchasedItems.forEach(x => void deleteCloudItem(x.cloudId));
     setHistory(v => [purchase, ...v]);
     setItems(v => v.filter(x => !x.purchased));
+
+    if (listId && syncStatus === "sincronizado") {
+      window.setTimeout(() => {
+        void synchronizeHistory(false);
+      }, 600);
+    }
   }
 
   function clearPurchased() {
     if (!bought) return;
     if (confirm(`Remover ${bought} item(ns) já comprado(s) da lista?`)) {
+      items.filter(x => x.purchased).forEach(x => void deleteCloudItem(x.cloudId));
       setItems(v => v.filter(x => !x.purchased));
+    }
+  }
+
+  async function linkAnotherDevice() {
+    const code = linkCodeInput.trim().toUpperCase();
+    if (!code) {
+      setSyncMessage("Informe o código de vinculação.");
+      return;
+    }
+
+    try {
+      setSyncStatus("inicializando");
+      setSyncError("");
+      const { data, error } = await supabase.rpc("vincular_dispositivo_por_codigo", {
+        p_codigo: code
+      });
+      if (error) throw error;
+
+      const result = Array.isArray(data) ? data[0] : data;
+      if (!result?.lista_id) throw new Error("Código de vinculação inválido.");
+
+      const nextListId = String(result.lista_id);
+      setListId(nextListId);
+      setLinkCode(String(result.codigo_vinculacao || code));
+      localStorage.setItem(SYNC_LIST_ID_KEY, nextListId);
+      localStorage.setItem(SYNC_CODE_KEY, String(result.codigo_vinculacao || code));
+
+      const { data: rows, error: rowsError } = await supabase
+        .from("itens")
+        .select("id, lista_id, nome, categoria, quantidade, preco_unitario, comprado, updated_at")
+        .eq("lista_id", nextListId)
+        .order("created_at", { ascending: true });
+      if (rowsError) throw rowsError;
+
+      const remoteItems = (rows || []).map((row: any, index: number) => ({
+        id: Date.now() + index,
+        cloudId: row.id,
+        updatedAt: row.updated_at,
+        name: row.nome,
+        category: row.categoria,
+        quantity: Number(row.quantidade),
+        unitPrice: Number(row.preco_unitario),
+        purchased: Boolean(row.comprado)
+      })) as Item[];
+
+      setItems(remoteItems);
+
+      const remoteHistory = await pullHistoryFromCloud(nextListId);
+      setHistory(remoteHistory);
+
+      setSyncStatus("sincronizado");
+      setSyncMessage("Dispositivo vinculado. Lista e histórico carregados da nuvem.");
+      setLinkCodeInput("");
+    } catch (error) {
+      console.error("Erro ao vincular dispositivo:", error);
+      setSyncStatus(navigator.onLine ? "erro" : "offline");
+      setSyncError(error instanceof Error ? error.message : "Não foi possível vincular o dispositivo.");
     }
   }
 
@@ -612,11 +1085,28 @@ export default function App() {
         category,
         quantity: 1,
         unitPrice: 0,
-        purchased: false
+        purchased: false,
+        updatedAt: new Date().toISOString()
       }
     ]);
 
     e.currentTarget.value = "";
+  }
+
+  async function syncNow() {
+    if (!listId) return;
+
+    try {
+      await synchronizeItems(false);
+      await synchronizeHistory(false);
+      setSyncStatus("sincronizado");
+      setSyncMessage("Lista e histórico sincronizados com a nuvem.");
+      localStorage.setItem(SYNC_LAST_SYNC_KEY, new Date().toISOString());
+    } catch (error) {
+      console.error("Erro ao sincronizar lista e histórico:", error);
+      setSyncStatus(navigator.onLine ? "erro" : "offline");
+      setSyncError(error instanceof Error ? error.message : "Não foi possível sincronizar a lista e o histórico.");
+    }
   }
 
   return (
@@ -631,7 +1121,7 @@ export default function App() {
             </div>
             <div>
               <b>Lista de Mercado</b>
-              <div className="text-xs text-slate-400">versão 1.2.0.5</div>
+              <div className="text-xs text-slate-400">versão 1.2.0.8</div>
             </div>
             <button
               className="ml-auto lg:hidden"
@@ -1494,7 +1984,7 @@ export default function App() {
                       </p>
                       <h1 className="text-3xl font-bold">Configurações</h1>
                       <p className="mt-2 text-slate-500">
-                        Preparação da sincronização entre seus dispositivos.
+                        Sincronização dos itens entre seus dispositivos.
                       </p>
                     </div>
 
@@ -1554,17 +2044,53 @@ export default function App() {
                       </div>
 
                       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                        <h2 className="font-bold">Nesta versão</h2>
-                        <div className="mt-4 space-y-3 text-sm text-slate-600">
-                          <p>✓ Identidade anônima criada automaticamente.</p>
-                          <p>✓ Sua lista é criada/recuperada no Supabase.</p>
-                          <p>✓ Identificador da lista salvo localmente.</p>
-                          <p>✓ Código de vinculação preparado.</p>
-                          <p>✓ localStorage continua funcionando offline.</p>
-                        </div>
-                        <p className="mt-5 text-xs text-slate-400">
-                          A sincronização dos itens será ativada nas próximas etapas da v1.2.0.
+                        <h2 className="font-bold">Sincronização da lista</h2>
+                        <p className="mt-1 text-sm text-slate-400">
+                          Os itens ficam disponíveis nos dispositivos vinculados à mesma lista.
                         </p>
+
+                        <button
+                          onClick={() => void syncNow()}
+                          disabled={syncingItems || !listId}
+                          className="mt-5 w-full rounded-xl bg-emerald-500 px-4 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {syncingItems || syncingHistory ? "Sincronizando..." : "Sincronizar agora"}
+                        </button>
+
+                        {syncMessage && (
+                          <div className="mt-4 rounded-xl bg-emerald-50 p-4 text-sm text-emerald-700">
+                            {syncMessage}
+                          </div>
+                        )}
+
+                        <div className="mt-5 rounded-xl bg-slate-50 p-4 text-sm text-slate-600">
+                          <p>✓ Adicionar, editar e marcar itens como comprados sincroniza.</p>
+                          <p>✓ Histórico de compras também sincroniza entre dispositivos.</p>
+                          <p className="mt-2">✓ Excluir itens também remove o registro da nuvem.</p>
+                          <p className="mt-2">✓ localStorage continua disponível para uso offline.</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                      <h2 className="font-bold">Vincular outro dispositivo</h2>
+                      <p className="mt-1 text-sm text-slate-400">
+                        Em outro dispositivo, use o código desta lista para entrar na mesma lista de compras.
+                      </p>
+                      <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto]">
+                        <input
+                          value={linkCodeInput}
+                          onChange={e => setLinkCodeInput(e.target.value.toUpperCase())}
+                          placeholder="Ex.: LM-ABC123DEF456"
+                          className="rounded-xl border border-slate-200 px-4 py-3 font-mono uppercase outline-none focus:border-emerald-400"
+                        />
+                        <button
+                          onClick={() => void linkAnotherDevice()}
+                          disabled={!linkCodeInput.trim()}
+                          className="rounded-xl bg-slate-900 px-5 py-3 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Vincular
+                        </button>
                       </div>
                     </div>
 
