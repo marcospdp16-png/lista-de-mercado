@@ -1,4 +1,4 @@
-// Lista de Mercado v1.2.2
+// Lista de Mercado v1.3.0.1
 // Sincronização da Lista de Compras com Supabase, mantendo localStorage como cache/offline.
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
@@ -6,7 +6,7 @@ import { supabase } from "./lib/supabase";
 import {
   BarChart3, CheckCircle2, Circle, ClipboardList, LayoutDashboard,
   ListChecks, Menu, Minus, Pencil, Plus, Search, Settings,
-  ShoppingCart, Tags, Trash2, X
+  ShoppingCart, Tags, Trash2, X, Star
 } from "lucide-react";
 
 type Item = {
@@ -18,9 +18,10 @@ type Item = {
   quantity: number;
   unitPrice: number;
   purchased: boolean;
+  favorite?: boolean;
 };
 
-type Filter = "Todos" | "Pendentes" | "Comprados";
+type Filter = "Todos" | "Pendentes" | "Comprados" | "Favoritos";
 
 type PurchaseHistory = {
   id: number;
@@ -223,6 +224,7 @@ export default function App() {
         quantidade: item.quantity,
         preco_unitario: item.unitPrice,
         comprado: item.purchased,
+        favorito: Boolean(item.favorite),
         updated_at: item.updatedAt
       }));
 
@@ -244,6 +246,7 @@ export default function App() {
           quantidade: item.quantity,
           preco_unitario: item.unitPrice,
           comprado: item.purchased,
+          favorito: Boolean(item.favorite),
           updated_at: item.updatedAt
         })
         .eq("id", item.cloudId)
@@ -272,7 +275,7 @@ export default function App() {
 
     const { data, error } = await supabase
       .from("itens")
-      .select("id, lista_id, nome, categoria, quantidade, preco_unitario, comprado, updated_at, deleted_at")
+      .select("id, lista_id, nome, categoria, quantidade, preco_unitario, comprado, favorito, updated_at, deleted_at")
       .eq("lista_id", listId)
       .order("created_at", { ascending: true });
 
@@ -288,7 +291,8 @@ export default function App() {
         category: row.categoria,
         quantity: Number(row.quantidade),
         unitPrice: Number(row.preco_unitario),
-        purchased: Boolean(row.comprado)
+        purchased: Boolean(row.comprado),
+        favorite: Boolean(row.favorito)
       })) as Item[];
   }
 
@@ -613,7 +617,7 @@ export default function App() {
           if (cloudRows && cloudRows.length > 0) {
             const { data: fullRows, error: fullError } = await supabase
               .from("itens")
-              .select("id, lista_id, nome, categoria, quantidade, preco_unitario, comprado, updated_at, deleted_at")
+              .select("id, lista_id, nome, categoria, quantidade, preco_unitario, comprado, favorito, updated_at, deleted_at")
               .eq("lista_id", nextListId)
               .order("created_at", { ascending: true });
             if (fullError) throw fullError;
@@ -626,7 +630,8 @@ export default function App() {
               category: row.categoria,
               quantity: Number(row.quantidade),
               unitPrice: Number(row.preco_unitario),
-              purchased: Boolean(row.comprado)
+              purchased: Boolean(row.comprado),
+              favorite: Boolean(row.favorito)
             })) as Item[];
             setItems(remoteItems);
           } else if (hadLocalItems) {
@@ -745,7 +750,8 @@ export default function App() {
       (
         filter === "Todos" ||
         (filter === "Comprados" && x.purchased) ||
-        (filter === "Pendentes" && !x.purchased)
+        (filter === "Pendentes" && !x.purchased) ||
+        (filter === "Favoritos" && Boolean(x.favorite))
       ) &&
       (categoryFilter === "Todas" || x.category === categoryFilter)
     );
@@ -1016,6 +1022,7 @@ export default function App() {
           quantity,
           unitPrice,
           purchased: false,
+          favorite: false,
           updatedAt: new Date().toISOString(),
         },
       ]);
@@ -1049,6 +1056,41 @@ export default function App() {
       if (error) throw error;
     } catch (error) {
       console.error("Erro ao excluir item na nuvem:", error);
+    }
+  }
+
+  async function toggleFavorite(item: Item) {
+    const nextFavorite = !Boolean(item.favorite);
+    const updatedAt = new Date().toISOString();
+
+    setItems(current =>
+      current.map(existing =>
+        existing.id === item.id
+          ? { ...existing, favorite: nextFavorite, updatedAt }
+          : existing
+      )
+    );
+
+    if (item.cloudId && listId && navigator.onLine) {
+      try {
+        const { error } = await supabase
+          .from("itens")
+          .update({
+            favorito: nextFavorite,
+            updated_at: updatedAt,
+          })
+          .eq("id", item.cloudId)
+          .eq("lista_id", listId);
+
+        if (error) throw error;
+      } catch (error) {
+        console.error("Erro ao sincronizar favorito:", error);
+        setSyncError(
+          error instanceof Error
+            ? error.message
+            : "Não foi possível sincronizar o favorito."
+        );
+      }
     }
   }
 
@@ -1121,7 +1163,7 @@ export default function App() {
 
       const { data: rows, error: rowsError } = await supabase
         .from("itens")
-        .select("id, lista_id, nome, categoria, quantidade, preco_unitario, comprado, updated_at, deleted_at")
+        .select("id, lista_id, nome, categoria, quantidade, preco_unitario, comprado, favorito, updated_at, deleted_at")
         .eq("lista_id", nextListId)
         .order("created_at", { ascending: true });
       if (rowsError) throw rowsError;
@@ -1134,7 +1176,8 @@ export default function App() {
         category: row.categoria,
         quantity: Number(row.quantidade),
         unitPrice: Number(row.preco_unitario),
-        purchased: Boolean(row.comprado)
+        purchased: Boolean(row.comprado),
+        favorite: Boolean(row.favorito)
       })) as Item[];
 
       setItems(remoteItems);
@@ -1168,6 +1211,7 @@ export default function App() {
         quantity: 1,
         unitPrice: 0,
         purchased: false,
+        favorite: false,
         updatedAt: new Date().toISOString()
       }
     ]);
@@ -1534,7 +1578,7 @@ export default function App() {
                     </select>
 
                     <div className="flex rounded-xl bg-slate-100 p-1">
-                      {(["Todos", "Pendentes", "Comprados"] as Filter[]).map(f => (
+                      {(["Todos", "Pendentes", "Comprados", "Favoritos"] as Filter[]).map(f => (
                         <button
                           key={f}
                           onClick={() => setFilter(f)}
@@ -1621,7 +1665,18 @@ export default function App() {
                             <td className={`px-3 py-4 font-semibold ${
                               x.purchased ? "line-through" : ""
                             }`}>
-                              {x.name}
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => void toggleFavorite(x)}
+                                  className={`shrink-0 ${x.favorite ? "text-amber-500" : "text-slate-300 hover:text-amber-400"}`}
+                                  title={x.favorite ? "Remover dos favoritos" : "Adicionar aos favoritos"}
+                                  aria-label={x.favorite ? "Remover dos favoritos" : "Adicionar aos favoritos"}
+                                >
+                                  <Star size={17} fill={x.favorite ? "currentColor" : "none"} />
+                                </button>
+                                <span>{x.name}</span>
+                              </div>
                             </td>
 
                             <td className="px-3 py-4">
@@ -1713,9 +1768,20 @@ export default function App() {
                           </button>
 
                                 <div className="flex-1">
-                            <b className={x.purchased ? "line-through" : ""}>
-                              {x.name}
-                            </b>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void toggleFavorite(x)}
+                                className={`shrink-0 ${x.favorite ? "text-amber-500" : "text-slate-300 hover:text-amber-400"}`}
+                                title={x.favorite ? "Remover dos favoritos" : "Adicionar aos favoritos"}
+                                aria-label={x.favorite ? "Remover dos favoritos" : "Adicionar aos favoritos"}
+                              >
+                                <Star size={17} fill={x.favorite ? "currentColor" : "none"} />
+                              </button>
+                              <b className={x.purchased ? "line-through" : ""}>
+                                {x.name}
+                              </b>
+                            </div>
                                   <div className="text-xs text-slate-400">
                               {x.category}
                                   </div>
@@ -2232,6 +2298,7 @@ export default function App() {
                         <div className="mt-5 rounded-xl bg-slate-50 p-4 text-sm text-slate-600">
                           <p>✓ Adicionar, editar e marcar itens como comprados sincroniza.</p>
                           <p>✓ Histórico de compras também sincroniza entre dispositivos.</p>
+                          <p>✓ Favoritos sincronizam entre PC e celular.</p>
                           <p className="mt-2">✓ Excluir itens também remove o registro da nuvem.</p>
                           <p className="mt-2">✓ localStorage continua disponível para uso offline.</p>
                         </div>
