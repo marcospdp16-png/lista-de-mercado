@@ -1,4 +1,4 @@
-// Lista de Mercado v1.2.1
+// Lista de Mercado v1.2.2
 // Sincronização da Lista de Compras com Supabase, mantendo localStorage como cache/offline.
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
@@ -37,6 +37,7 @@ const BUDGET_KEY = "lista-mercado-budget-v1";
 const SYNC_LIST_ID_KEY = "lista-mercado-sync-list-id-v1";
 const SYNC_CODE_KEY = "lista-mercado-sync-code-v1";
 const SYNC_LAST_SYNC_KEY = "lista-mercado-sync-last-v1";
+const DELETED_ITEMS_KEY = "lista-mercado-deleted-items-v1";
 
 type SyncStatus = "inicializando" | "sincronizado" | "offline" | "erro";
 
@@ -178,6 +179,7 @@ export default function App() {
   const [syncMessage, setSyncMessage] = useState("");
   const [syncingItems, setSyncingItems] = useState(false);
   const [syncingHistory, setSyncingHistory] = useState(false);
+  const [conflictMessage, setConflictMessage] = useState("");
   const [lastSyncAt, setLastSyncAt] = useState<string>(() =>
     localStorage.getItem(SYNC_LAST_SYNC_KEY) || ""
   );
@@ -207,50 +209,53 @@ export default function App() {
   async function pushItemsToCloud(currentItems: Item[], targetListId = listId) {
     if (!targetListId) return currentItems;
 
-    const payload = currentItems.map(item => ({
-      id: item.cloudId,
-      lista_id: targetListId,
-      nome: item.name,
-      categoria: item.category,
-      quantidade: item.quantity,
-      preco_unitario: item.unitPrice,
-      comprado: item.purchased,
-      ...(item.updatedAt ? { updated_at: item.updatedAt } : {})
-    }));
+    const inserted: { id: string; updated_at: string }[] = [];
+    const itemsWithDates = currentItems.map(item =>
+      item.updatedAt ? item : withUpdatedAt(item)
+    );
 
-    const toInsert = payload.filter(item => !item.id).map(({ id: _id, ...item }) => item);
-    const toUpdate = payload.filter(item => Boolean(item.id));
-
-    const inserted: { id: string; lista_id: string; nome: string; categoria: string; quantidade: number; preco_unitario: number; comprado: boolean; updated_at: string }[] = [];
-
+    const toInsert = itemsWithDates.filter(item => !item.cloudId);
     if (toInsert.length) {
+      const payload = toInsert.map(item => ({
+        lista_id: targetListId,
+        nome: item.name,
+        categoria: item.category,
+        quantidade: item.quantity,
+        preco_unitario: item.unitPrice,
+        comprado: item.purchased,
+        updated_at: item.updatedAt
+      }));
+
       const { data, error } = await supabase
         .from("itens")
-        .insert(toInsert)
-        .select("id, lista_id, nome, categoria, quantidade, preco_unitario, comprado, updated_at");
+        .insert(payload)
+        .select("id, updated_at");
+
       if (error) throw error;
       inserted.push(...(data || []));
     }
 
-    for (const item of toUpdate) {
+    for (const item of itemsWithDates.filter(x => Boolean(x.cloudId))) {
       const { error } = await supabase
         .from("itens")
         .update({
-          nome: item.nome,
-          categoria: item.categoria,
-          quantidade: item.quantidade,
-          preco_unitario: item.preco_unitario,
-          comprado: item.comprado,
-          ...(item.updated_at ? { updated_at: item.updated_at } : {})
+          nome: item.name,
+          categoria: item.category,
+          quantidade: item.quantity,
+          preco_unitario: item.unitPrice,
+          comprado: item.purchased,
+          updated_at: item.updatedAt
         })
-        .eq("id", item.id)
-        .eq("lista_id", targetListId);
+        .eq("id", item.cloudId)
+        .eq("lista_id", targetListId)
+        .lt("updated_at", item.updatedAt!);
+
       if (error) throw error;
     }
 
     if (inserted.length) {
       let insertedIndex = 0;
-      return currentItems.map(item => {
+      return itemsWithDates.map(item => {
         if (item.cloudId) return item;
         const remote = inserted[insertedIndex++];
         return remote
@@ -259,7 +264,7 @@ export default function App() {
       });
     }
 
-    return currentItems;
+    return itemsWithDates;
   }
 
   async function pullItemsFromCloud() {
@@ -267,22 +272,50 @@ export default function App() {
 
     const { data, error } = await supabase
       .from("itens")
-      .select("id, lista_id, nome, categoria, quantidade, preco_unitario, comprado, updated_at")
+      .select("id, lista_id, nome, categoria, quantidade, preco_unitario, comprado, updated_at, deleted_at")
       .eq("lista_id", listId)
       .order("created_at", { ascending: true });
 
     if (error) throw error;
 
-    return (data || []).map((row: any, index: number) => ({
-      id: nextLocalId([]) + index,
-      cloudId: row.id,
-      updatedAt: row.updated_at,
-      name: row.nome,
-      category: row.categoria,
-      quantity: Number(row.quantidade),
-      unitPrice: Number(row.preco_unitario),
-      purchased: Boolean(row.comprado)
-    })) as Item[];
+    return (data || [])
+      .filter((row: any) => !row.deleted_at)
+      .map((row: any, index: number) => ({
+        id: nextLocalId([]) + index,
+        cloudId: row.id,
+        updatedAt: row.updated_at,
+        name: row.nome,
+        category: row.categoria,
+        quantity: Number(row.quantidade),
+        unitPrice: Number(row.preco_unitario),
+        purchased: Boolean(row.comprado)
+      })) as Item[];
+  }
+
+  async function syncDeletedItems(targetListId = listId) {
+    if (!targetListId) return;
+
+    const raw = localStorage.getItem(DELETED_ITEMS_KEY);
+    const tombstones: { cloudId: string; deletedAt: string }[] = raw ? JSON.parse(raw) : [];
+    if (!tombstones.length) return;
+
+    const remaining: typeof tombstones = [];
+
+    for (const tombstone of tombstones) {
+      const { error } = await supabase
+        .from("itens")
+        .update({
+          deleted_at: tombstone.deletedAt,
+          updated_at: tombstone.deletedAt
+        })
+        .eq("id", tombstone.cloudId)
+        .eq("lista_id", targetListId)
+        .lt("updated_at", tombstone.deletedAt);
+
+      if (error) throw error;
+    }
+
+    localStorage.setItem(DELETED_ITEMS_KEY, JSON.stringify(remaining));
   }
 
   function historySignature(purchase: PurchaseHistory) {
@@ -434,35 +467,62 @@ export default function App() {
     }
   }
 
+  function withUpdatedAtIfMissing(item: Item): Item {
+    return item.updatedAt ? item : withUpdatedAt(item);
+  }
+
   async function synchronizeItems(preferLocal = false) {
     if (!listId) return;
 
     setSyncingItems(true);
     setSyncMessage("");
+    setConflictMessage("");
 
     try {
-      const localItems = items;
+      const localItems = items.map(item => item.updatedAt ? item : withUpdatedAt(item));
       const cloudItems = await pullItemsFromCloud();
 
+      await syncDeletedItems(listId);
+
       if (cloudItems.length === 0 && preferLocal && localItems.length > 0) {
-        const normalized = localItems.map(withUpdatedAt);
-        const uploaded = await pushItemsToCloud(normalized);
+        const uploaded = await pushItemsToCloud(localItems);
         setItems(uploaded);
       } else {
         const localByCloudId = new Map(localItems.filter(x => x.cloudId).map(x => [x.cloudId!, x]));
-        const merged = cloudItems.map(remote => {
+        const localOnly = localItems.filter(x => !x.cloudId);
+        const localWins: Item[] = [];
+        const remoteWins: Item[] = [];
+        const merged: Item[] = [];
+
+        for (const remote of cloudItems) {
           const local = localByCloudId.get(remote.cloudId);
           if (local && local.updatedAt && remote.updatedAt && local.updatedAt > remote.updatedAt) {
-            return local;
+            localWins.push(local);
+            merged.push(local);
+          } else {
+            if (local && local.updatedAt !== remote.updatedAt) remoteWins.push(remote);
+            merged.push(remote);
           }
-          return remote;
-        });
-        setItems(merged);
+        }
+
+        if (localOnly.length) {
+          merged.push(...localOnly);
+        }
+
+        const mergedWithDates = merged.map(withUpdatedAtIfMissing);
+        const uploaded = await pushItemsToCloud(mergedWithDates);
+        setItems(uploaded);
+
+        if (localWins.length) {
+          setConflictMessage(`${localWins.length} alteração(ões) local(is) mais recente(s) foram preservadas.`);
+        } else if (remoteWins.length) {
+          setConflictMessage(`${remoteWins.length} alteração(ões) da nuvem foram aplicadas neste dispositivo.`);
+        }
       }
 
       localStorage.setItem(SYNC_LAST_SYNC_KEY, new Date().toISOString());
       setSyncStatus("sincronizado");
-      setSyncMessage("Lista sincronizada com a nuvem.");
+      setSyncMessage("Lista sincronizada com proteção contra conflitos.");
     } catch (error) {
       console.error("Erro ao sincronizar itens:", error);
       setSyncStatus(navigator.onLine ? "erro" : "offline");
@@ -553,12 +613,12 @@ export default function App() {
           if (cloudRows && cloudRows.length > 0) {
             const { data: fullRows, error: fullError } = await supabase
               .from("itens")
-              .select("id, lista_id, nome, categoria, quantidade, preco_unitario, comprado, updated_at")
+              .select("id, lista_id, nome, categoria, quantidade, preco_unitario, comprado, updated_at, deleted_at")
               .eq("lista_id", nextListId)
               .order("created_at", { ascending: true });
             if (fullError) throw fullError;
 
-            const remoteItems = (fullRows || []).map((row: any, index: number) => ({
+            const remoteItems = (fullRows || []).filter((row: any) => !row.deleted_at).map((row: any, index: number) => ({
               id: Date.now() + index,
               cloudId: row.id,
               updatedAt: row.updated_at,
@@ -618,6 +678,7 @@ export default function App() {
 
     const timer = window.setTimeout(async () => {
       try {
+        await syncDeletedItems(listId);
         const normalized = items.map(item => item.updatedAt ? item : withUpdatedAt(item));
         const uploaded = await pushItemsToCloud(normalized);
         if (JSON.stringify(uploaded) !== JSON.stringify(items)) {
@@ -968,8 +1029,23 @@ export default function App() {
 
   async function deleteCloudItem(cloudId?: string) {
     if (!cloudId || !listId) return;
+    const deletedAt = new Date().toISOString();
+    const raw = localStorage.getItem(DELETED_ITEMS_KEY);
+    const tombstones: { cloudId: string; deletedAt: string }[] = raw ? JSON.parse(raw) : [];
+    if (!tombstones.some(x => x.cloudId === cloudId)) {
+      tombstones.push({ cloudId, deletedAt });
+      localStorage.setItem(DELETED_ITEMS_KEY, JSON.stringify(tombstones));
+    }
+
+    if (!navigator.onLine) return;
+
     try {
-      const { error } = await supabase.from("itens").delete().eq("id", cloudId).eq("lista_id", listId);
+      const { error } = await supabase
+        .from("itens")
+        .update({ deleted_at: deletedAt, updated_at: deletedAt })
+        .eq("id", cloudId)
+        .eq("lista_id", listId)
+        .lt("updated_at", deletedAt);
       if (error) throw error;
     } catch (error) {
       console.error("Erro ao excluir item na nuvem:", error);
@@ -1045,7 +1121,7 @@ export default function App() {
 
       const { data: rows, error: rowsError } = await supabase
         .from("itens")
-        .select("id, lista_id, nome, categoria, quantidade, preco_unitario, comprado, updated_at")
+        .select("id, lista_id, nome, categoria, quantidade, preco_unitario, comprado, updated_at, deleted_at")
         .eq("lista_id", nextListId)
         .order("created_at", { ascending: true });
       if (rowsError) throw rowsError;
@@ -1197,7 +1273,7 @@ export default function App() {
             </div>
             <div>
               <b>Lista de Mercado</b>
-              <div className="text-xs text-slate-400">versão 1.2.1</div>
+              <div className="text-xs text-slate-400">versão 1.2.2</div>
             </div>
             <button
               className="ml-auto lg:hidden"
