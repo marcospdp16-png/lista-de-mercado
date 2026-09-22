@@ -1,4 +1,4 @@
-// Lista de Mercado v1.3.1
+// Lista de Mercado v1.3.3.1
 // Sincronização da Lista de Compras com Supabase, mantendo localStorage como cache/offline.
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
@@ -7,7 +7,7 @@ import {
   BarChart3, CheckCircle2, Circle, ClipboardList, LayoutDashboard,
   TrendingUp,
   ListChecks, Menu, Minus, Pencil, Plus, Search, Settings,
-  ShoppingCart, Tags, Trash2, X, Star
+  ShoppingCart, Tags, Trash2, X, Star, Sparkles
 } from "lucide-react";
 
 type Item = {
@@ -989,6 +989,7 @@ export default function App() {
     ["Histórico", ListChecks],
     ["Orçamento", BarChart3],
     ["Histórico de Preços", TrendingUp],
+    ["Lista Inteligente", Sparkles],
     ["Configurações", Settings]
   ] as const;
 
@@ -1405,6 +1406,68 @@ export default function App() {
       .slice(0, 8);
   }, [history, items]);
 
+  const intelligentProducts = useMemo(() => {
+    const pendingNames = new Set(
+      items.filter(item => !item.purchased).map(item => normalizeText(item.name))
+    );
+
+    const stats = new Map<string, {
+      name: string;
+      category: string;
+      unitPrice: number;
+      purchases: number;
+      lastDate: string;
+      favorite: boolean;
+    }>();
+
+    history.forEach(purchase => {
+      purchase.items.forEach(item => {
+        const key = normalizeText(item.name);
+        if (!key) return;
+        const existing = stats.get(key);
+        if (!existing) {
+          stats.set(key, {
+            name: item.name,
+            category: item.category || detectCategory(item.name),
+            unitPrice: Number(item.unitPrice) || 0,
+            purchases: 1,
+            lastDate: purchase.date,
+            favorite: Boolean(item.favorite),
+          });
+        } else {
+          existing.purchases += 1;
+          existing.favorite = existing.favorite || Boolean(item.favorite);
+          if (new Date(purchase.date).getTime() > new Date(existing.lastDate).getTime()) {
+            existing.lastDate = purchase.date;
+            existing.unitPrice = Number(item.unitPrice) || existing.unitPrice;
+            existing.category = item.category || existing.category;
+          }
+        }
+      });
+    });
+
+    const now = Date.now();
+    return Array.from(stats.values())
+      .filter(product => !pendingNames.has(normalizeText(product.name)))
+      .map(product => {
+        const daysSince = Math.max(0, Math.floor((now - new Date(product.lastDate).getTime()) / 86400000));
+        const recencyScore = daysSince <= 7 ? 35 : daysSince <= 14 ? 28 : daysSince <= 30 ? 20 : daysSince <= 60 ? 10 : 3;
+        const frequencyScore = Math.min(40, product.purchases * 8);
+        const favoriteScore = product.favorite ? 25 : 0;
+        const score = Math.min(100, frequencyScore + recencyScore + favoriteScore);
+        const reason = product.favorite
+          ? "Favorito + comprado com frequência"
+          : product.purchases >= 3
+            ? "Comprado com frequência"
+            : daysSince <= 14
+              ? "Comprado recentemente"
+              : "Já comprado anteriormente";
+        return { ...product, daysSince, score, reason };
+      })
+      .sort((a, b) => b.score - a.score || b.purchases - a.purchases || a.name.localeCompare(b.name, "pt-BR"))
+      .slice(0, 12);
+  }, [history, items]);
+
   async function addFrequentProduct(product: {
     name: string;
     category: string;
@@ -1479,7 +1542,7 @@ export default function App() {
             </div>
             <div>
               <b>Lista de Mercado</b>
-              <div className="text-xs text-slate-400">versão 1.3.2</div>
+              <div className="text-xs text-slate-400">versão 1.3.3</div>
             </div>
             <button
               className="ml-auto lg:hidden"
@@ -1602,7 +1665,7 @@ export default function App() {
                 </p>
               </div>
 
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="grid w-full grid-cols-[repeat(4,minmax(0,1fr))] gap-1 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
                 <Stat
                   icon={<ShoppingCart />}
                   title="Itens na lista"
@@ -2296,6 +2359,72 @@ export default function App() {
                         </>
                       )}
                     </>
+                  ) : page === "Lista Inteligente" ? (
+                    <>
+                      <div className="mb-7">
+                        <p className="text-sm font-medium text-emerald-600">
+                          Sugestões inteligentes
+                        </p>
+                        <h1 className="text-3xl font-bold">Lista Inteligente</h1>
+                        <p className="mt-2 text-slate-500">
+                          Sugestões calculadas automaticamente a partir dos seus favoritos, frequência e recência de compras.
+                        </p>
+                      </div>
+
+                      {!intelligentProducts.length ? (
+                        <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
+                          <Sparkles className="mx-auto text-slate-300" size={42} />
+                          <h2 className="mt-4 text-lg font-bold">Ainda não há sugestões</h2>
+                          <p className="mt-2 text-sm text-slate-500">
+                            Finalize algumas compras para que o sistema aprenda seus produtos mais recorrentes.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                          {intelligentProducts.map(product => (
+                            <div key={normalizeText(product.name)} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    {product.favorite && <Star size={17} className="fill-amber-400 text-amber-400" />}
+                                    <h2 className="truncate font-bold text-slate-900">{product.name}</h2>
+                                  </div>
+                                  <p className="mt-1 text-xs text-slate-500">{product.category}</p>
+                                </div>
+                                <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">
+                                  {product.score}/100
+                                </span>
+                              </div>
+
+                              <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+                                <div className="rounded-xl bg-slate-50 p-3">
+                                  <span className="text-slate-400">Compras</span>
+                                  <div className="mt-1 font-bold text-slate-800">{product.purchases}</div>
+                                </div>
+                                <div className="rounded-xl bg-slate-50 p-3">
+                                  <span className="text-slate-400">Último preço</span>
+                                  <div className="mt-1 font-bold text-slate-800">{money(product.unitPrice)}</div>
+                                </div>
+                              </div>
+
+                              <p className="mt-3 text-xs text-slate-500">
+                                💡 {product.reason} • última compra há {product.daysSince} dia(s)
+                              </p>
+
+                              <button
+                                type="button"
+                                onClick={() => void addFrequentProduct(product)}
+                                disabled={quickAddingName === product.name}
+                                className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-600 disabled:opacity-60"
+                              >
+                                <Plus size={17} />
+                                {quickAddingName === product.name ? "Adicionando..." : "Adicionar à lista"}
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
                   ) : page === "Orçamento" ? (
                     <>
                       <div className="mb-7">
@@ -2873,12 +3002,12 @@ function Stat({
   value: string;
 }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
+    <div className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-sm sm:rounded-2xl sm:p-5">
+      <div className="mx-auto mb-1 flex h-5 w-full items-center justify-center rounded-md bg-emerald-50 text-emerald-600 sm:mx-0 sm:mb-4 sm:h-10 sm:w-10 sm:rounded-xl">
         {icon}
       </div>
-      <div className="text-sm text-slate-400">{title}</div>
-      <div className="mt-1 text-2xl font-bold">{value}</div>
+      <div className="w-full truncate text-center text-[7px] leading-tight text-slate-400 sm:text-left sm:text-sm">{title}</div>
+      <div className="mt-0.5 truncate text-center text-[9px] font-bold sm:mt-1 sm:text-left sm:text-2xl">{value}</div>
     </div>
   );
 }
