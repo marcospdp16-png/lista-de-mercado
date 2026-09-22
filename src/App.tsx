@@ -1,10 +1,11 @@
-// Lista de Mercado v1.3.0.1
+// Lista de Mercado v1.3.1
 // Sincronização da Lista de Compras com Supabase, mantendo localStorage como cache/offline.
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./lib/supabase";
 import {
   BarChart3, CheckCircle2, Circle, ClipboardList, LayoutDashboard,
+  TrendingUp,
   ListChecks, Menu, Minus, Pencil, Plus, Search, Settings,
   ShoppingCart, Tags, Trash2, X, Star
 } from "lucide-react";
@@ -160,6 +161,8 @@ export default function App() {
   const [historySearch, setHistorySearch] = useState("");
   const [historyMonth, setHistoryMonth] = useState("Todos");
   const [historyDetail, setHistoryDetail] = useState<PurchaseHistory | null>(null);
+  const [priceSearch, setPriceSearch] = useState("");
+  const [selectedPriceProduct, setSelectedPriceProduct] = useState("");
   const [formError, setFormError] = useState("");
   const [monthlyBudget, setMonthlyBudget] = useState<number>(() => {
     try {
@@ -180,6 +183,7 @@ export default function App() {
   const [syncMessage, setSyncMessage] = useState("");
   const [syncingItems, setSyncingItems] = useState(false);
   const [syncingHistory, setSyncingHistory] = useState(false);
+  const [quickAddingName, setQuickAddingName] = useState<string | null>(null);
   const [conflictMessage, setConflictMessage] = useState("");
   const [lastSyncAt, setLastSyncAt] = useState<string>(() =>
     localStorage.getItem(SYNC_LAST_SYNC_KEY) || ""
@@ -842,6 +846,49 @@ export default function App() {
     ? filteredHistoryTotal / filteredHistory.length
     : 0;
 
+  const priceProducts = useMemo(() => {
+    const map = new Map<string, { name: string; records: { date: string; price: number; quantity: number }[] }>();
+
+    history.forEach(purchase => {
+      purchase.items.forEach(item => {
+        const key = normalizeText(item.name);
+        if (!key) return;
+        if (!map.has(key)) map.set(key, { name: item.name, records: [] });
+        map.get(key)!.records.push({
+          date: purchase.date,
+          price: Number(item.unitPrice) || 0,
+          quantity: Number(item.quantity) || 0
+        });
+      });
+    });
+
+    return Array.from(map.entries())
+      .map(([key, value]) => {
+        const records = [...value.records].sort(
+          (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+        );
+        const prices = records.map(r => r.price);
+        return {
+          key,
+          name: value.name,
+          records,
+          last: records[records.length - 1]?.price || 0,
+          min: prices.length ? Math.min(...prices) : 0,
+          max: prices.length ? Math.max(...prices) : 0,
+          average: prices.length ? prices.reduce((a, b) => a + b, 0) / prices.length : 0
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  }, [history]);
+
+  const filteredPriceProducts = useMemo(() => {
+    const query = normalizeText(priceSearch);
+    return priceProducts.filter(product => !query || normalizeText(product.name).includes(query));
+  }, [priceProducts, priceSearch]);
+
+  const selectedPrice = priceProducts.find(p => p.key === selectedPriceProduct) || filteredPriceProducts[0] || null;
+
+
   async function deleteHistory(id: number) {
     if (!confirm("Excluir este registro do histórico?")) return;
 
@@ -941,6 +988,7 @@ export default function App() {
     ["Categorias", Tags],
     ["Histórico", ListChecks],
     ["Orçamento", BarChart3],
+    ["Histórico de Preços", TrendingUp],
     ["Configurações", Settings]
   ] as const;
 
@@ -1305,6 +1353,120 @@ export default function App() {
     };
   }, [listId]);
 
+  const frequentProducts = useMemo(() => {
+    const pendingNames = new Set(
+      items
+        .filter(item => !item.purchased)
+        .map(item => normalizeText(item.name))
+    );
+
+    const stats = new Map<string, {
+      name: string;
+      category: string;
+      unitPrice: number;
+      purchases: number;
+      lastDate: string;
+      favorite: boolean;
+    }>();
+
+    history.forEach(purchase => {
+      purchase.items.forEach(item => {
+        const key = normalizeText(item.name);
+        if (!key) return;
+
+        const existing = stats.get(key);
+        if (!existing) {
+          stats.set(key, {
+            name: item.name,
+            category: item.category || detectCategory(item.name),
+            unitPrice: Number(item.unitPrice) || 0,
+            purchases: 1,
+            lastDate: purchase.date,
+            favorite: Boolean(item.favorite),
+          });
+        } else {
+          existing.purchases += 1;
+          if (new Date(purchase.date).getTime() > new Date(existing.lastDate).getTime()) {
+            existing.lastDate = purchase.date;
+            existing.unitPrice = Number(item.unitPrice) || existing.unitPrice;
+            existing.category = item.category || existing.category;
+          }
+          existing.favorite = existing.favorite || Boolean(item.favorite);
+        }
+      });
+    });
+
+    return Array.from(stats.values())
+      .filter(product => product.purchases >= 1 && !pendingNames.has(normalizeText(product.name)))
+      .sort((a, b) => {
+        if (b.purchases !== a.purchases) return b.purchases - a.purchases;
+        return new Date(b.lastDate).getTime() - new Date(a.lastDate).getTime();
+      })
+      .slice(0, 8);
+  }, [history, items]);
+
+  async function addFrequentProduct(product: {
+    name: string;
+    category: string;
+    unitPrice: number;
+    favorite: boolean;
+  }) {
+    setQuickAddingName(product.name);
+
+    const newItem: Item = {
+      id: Date.now(),
+      name: product.name,
+      category: product.category || detectCategory(product.name),
+      quantity: 1,
+      unitPrice: Number(product.unitPrice) || 0,
+      purchased: false,
+      favorite: Boolean(product.favorite),
+      updatedAt: new Date().toISOString(),
+    };
+
+    setItems(current => [newItem, ...current]);
+
+    if (listId && navigator.onLine) {
+      try {
+        const { data, error } = await supabase
+          .from("itens")
+          .insert({
+            lista_id: listId,
+            nome: newItem.name,
+            categoria: newItem.category,
+            quantidade: newItem.quantity,
+            preco_unitario: newItem.unitPrice,
+            comprado: false,
+            favorito: newItem.favorite,
+            updated_at: newItem.updatedAt,
+          })
+          .select("id")
+          .single();
+
+        if (error) throw error;
+
+        if (data?.id) {
+          setItems(current =>
+            current.map(item =>
+              item.id === newItem.id
+                ? { ...item, cloudId: String(data.id) }
+                : item
+            )
+          );
+        }
+      } catch (error) {
+        console.error("Erro ao adicionar produto frequente:", error);
+        setSyncError(
+          error instanceof Error
+            ? error.message
+            : "Não foi possível sincronizar o produto frequente."
+        );
+      }
+    }
+
+    setQuickAddingName(null);
+  }
+
   return (
     <div className="min-h-screen bg-slate-50">
       <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-slate-950 text-white transition-transform lg:translate-x-0 ${
@@ -1317,7 +1479,7 @@ export default function App() {
             </div>
             <div>
               <b>Lista de Mercado</b>
-              <div className="text-xs text-slate-400">versão 1.2.2</div>
+              <div className="text-xs text-slate-400">versão 1.3.2</div>
             </div>
             <button
               className="ml-auto lg:hidden"
@@ -1489,7 +1651,48 @@ export default function App() {
               <div className="mt-7 rounded-2xl border border-slate-200 bg-white shadow-sm">
                 <div className="flex flex-col gap-4 border-b border-slate-100 p-5 xl:flex-row xl:items-center xl:justify-between">
                   <div>
-                    <h2 className="font-bold">Lista de Compras</h2>
+                    {frequentProducts.length > 0 && (
+                    <section className="mb-5 rounded-2xl border border-amber-100 bg-amber-50/70 p-4">
+                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <h3 className="font-semibold text-slate-900">⚡ Compra rápida</h3>
+                          <p className="text-xs text-slate-600">
+                            Produtos que aparecem no seu histórico de compras.
+                          </p>
+                        </div>
+                        <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-amber-700">
+                          {frequentProducts.length} sugestões
+                        </span>
+                      </div>
+
+                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                        {frequentProducts.map(product => (
+                          <button
+                            key={normalizeText(product.name)}
+                            type="button"
+                            onClick={() => void addFrequentProduct(product)}
+                            disabled={quickAddingName === product.name}
+                            className="flex items-center justify-between gap-3 rounded-xl border border-amber-100 bg-white px-3 py-3 text-left transition hover:border-amber-300 hover:shadow-sm disabled:opacity-60"
+                          >
+                            <span className="min-w-0">
+                              <span className="flex items-center gap-1.5 truncate font-semibold text-slate-800">
+                                {product.favorite && <span className="text-amber-500">★</span>}
+                                {product.name}
+                              </span>
+                              <span className="text-xs text-slate-500">
+                                {product.purchases} {product.purchases === 1 ? "compra" : "compras"}
+                              </span>
+                            </span>
+                            <span className="shrink-0 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-sm font-bold text-emerald-700">
+                              {quickAddingName === product.name ? "..." : "+1"}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+                  )}
+
+                  <h2 className="font-bold">Lista de Compras</h2>
                     <p className="text-sm text-slate-400">
                       {shown.length} item(ns) exibido(s)
                     </p>
@@ -1979,7 +2182,121 @@ export default function App() {
                 </>
               ) : (
                 <>
-                  {page === "Orçamento" ? (
+                  {page === "Histórico de Preços" ? (
+                    <>
+                      <div className="mb-7">
+                        <p className="text-sm font-medium text-emerald-600">
+                          Acompanhamento de preços
+                        </p>
+                        <h1 className="text-3xl font-bold">Histórico de Preços</h1>
+                        <p className="mt-2 text-slate-500">
+                          Consulte os preços registrados nas compras finalizadas.
+                        </p>
+                      </div>
+
+                      {!priceProducts.length ? (
+                        <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
+                          <TrendingUp className="mx-auto text-slate-300" size={42} />
+                          <h2 className="mt-4 text-lg font-bold">Ainda não há histórico de preços</h2>
+                          <p className="mt-2 text-sm text-slate-500">
+                            Finalize uma compra para começar a registrar a evolução dos preços.
+                          </p>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="mb-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                            <div className="relative">
+                              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                              <input
+                                value={priceSearch}
+                                onChange={e => setPriceSearch(e.target.value)}
+                                placeholder="Buscar produto..."
+                                className="w-full rounded-xl border border-slate-200 py-3 pl-10 pr-4 outline-none focus:border-emerald-500"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="grid gap-5 lg:grid-cols-[280px_1fr]">
+                            <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+                              <h2 className="px-3 pb-3 font-bold">Produtos</h2>
+                              <div className="max-h-[520px] space-y-1 overflow-auto">
+                                {filteredPriceProducts.map(product => (
+                                  <button
+                                    key={product.key}
+                                    onClick={() => setSelectedPriceProduct(product.key)}
+                                    className={`w-full rounded-xl px-3 py-3 text-left transition ${
+                                      (selectedPrice?.key === product.key)
+                                        ? "bg-emerald-50 text-emerald-800"
+                                        : "hover:bg-slate-50"
+                                    }`}
+                                  >
+                                    <div className="font-semibold">{product.name}</div>
+                                    <div className="mt-1 text-xs text-slate-400">
+                                      {product.records.length} registro(s)
+                                    </div>
+                                  </button>
+                                ))}
+                                {!filteredPriceProducts.length && (
+                                  <p className="px-3 py-5 text-sm text-slate-400">Nenhum produto encontrado.</p>
+                                )}
+                              </div>
+                            </div>
+
+                            {selectedPrice && (
+                              <div className="space-y-5">
+                                <div>
+                                  <h2 className="text-2xl font-bold">{selectedPrice.name}</h2>
+                                  <p className="mt-1 text-sm text-slate-500">
+                                    {selectedPrice.records.length} compra(s) registrada(s)
+                                  </p>
+                                </div>
+
+                                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                                  <SummaryCard title="Último preço" value={money(selectedPrice.last)} subtitle="Registro mais recente" />
+                                  <SummaryCard title="Menor preço" value={money(selectedPrice.min)} subtitle="Menor valor registrado" />
+                                  <SummaryCard title="Maior preço" value={money(selectedPrice.max)} subtitle="Maior valor registrado" />
+                                  <SummaryCard title="Preço médio" value={money(selectedPrice.average)} subtitle="Média dos registros" />
+                                </div>
+
+                                <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                                  <h3 className="font-bold">Evolução do preço</h3>
+                                  <div className="mt-5 space-y-4">
+                                    {selectedPrice.records.map((record, index) => {
+                                      const max = Math.max(selectedPrice.max, 1);
+                                      const width = Math.max(4, (record.price / max) * 100);
+                                      const previous = index > 0 ? selectedPrice.records[index - 1].price : null;
+                                      const difference = previous === null ? null : record.price - previous;
+                                      return (
+                                        <div key={`${record.date}-${index}`}>
+                                          <div className="mb-1 flex items-center justify-between gap-3 text-sm">
+                                            <span className="text-slate-500">
+                                              {new Date(record.date).toLocaleDateString("pt-BR")}
+                                            </span>
+                                            <span className="font-bold">{money(record.price)}</span>
+                                          </div>
+                                          <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+                                            <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${width}%` }} />
+                                          </div>
+                                          <div className="mt-1 flex justify-between text-xs text-slate-400">
+                                            <span>Qtd. {record.quantity}</span>
+                                            {difference !== null && (
+                                              <span className={difference > 0 ? "text-red-500" : difference < 0 ? "text-emerald-600" : "text-slate-400"}>
+                                                {difference > 0 ? "+" : ""}{money(difference)} vs. compra anterior
+                                              </span>
+                                            )}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </>
+                      )}
+                    </>
+                  ) : page === "Orçamento" ? (
                     <>
                       <div className="mb-7">
                         <p className="text-sm font-medium text-emerald-600">
@@ -2299,6 +2616,7 @@ export default function App() {
                           <p>✓ Adicionar, editar e marcar itens como comprados sincroniza.</p>
                           <p>✓ Histórico de compras também sincroniza entre dispositivos.</p>
                           <p>✓ Favoritos sincronizam entre PC e celular.</p>
+                          <p>✓ Compra rápida usa automaticamente produtos do seu histórico.</p>
                           <p className="mt-2">✓ Excluir itens também remove o registro da nuvem.</p>
                           <p className="mt-2">✓ localStorage continua disponível para uso offline.</p>
                         </div>
