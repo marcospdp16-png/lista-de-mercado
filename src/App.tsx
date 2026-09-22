@@ -1,10 +1,10 @@
-// Lista de Mercado v1.3.3.1
+// Lista de Mercado v1.3.4.2
 // Sincronização da Lista de Compras com Supabase, mantendo localStorage como cache/offline.
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./lib/supabase";
 import {
-  BarChart3, CheckCircle2, Circle, ClipboardList, LayoutDashboard,
+  BarChart3, Bell, CheckCircle2, Circle, ClipboardList, LayoutDashboard, Cloud, CloudOff, Loader2,
   TrendingUp,
   ListChecks, Menu, Minus, Pencil, Plus, Search, Settings,
   ShoppingCart, Tags, Trash2, X, Star, Sparkles
@@ -181,6 +181,7 @@ export default function App() {
   );
   const [linkCodeInput, setLinkCodeInput] = useState("");
   const [syncMessage, setSyncMessage] = useState("");
+  const [syncingNow, setSyncingNow] = useState(false);
   const [syncingItems, setSyncingItems] = useState(false);
   const [syncingHistory, setSyncingHistory] = useState(false);
   const [quickAddingName, setQuickAddingName] = useState<string | null>(null);
@@ -428,6 +429,64 @@ export default function App() {
     if (error) throw error;
   }
 
+  function getCurrentBudgetPeriod() {
+    const now = new Date();
+    return { mes: now.getMonth() + 1, ano: now.getFullYear() };
+  }
+
+  async function pullBudgetFromCloud(targetListId = listId) {
+    if (!targetListId) return null;
+
+    const { mes, ano } = getCurrentBudgetPeriod();
+    const { data, error } = await supabase
+      .from("orcamentos")
+      .select("id, valor, mes, ano, updated_at")
+      .eq("lista_id", targetListId)
+      .eq("mes", mes)
+      .eq("ano", ano)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data ? Number(data.valor) : null;
+  }
+
+  async function pushBudgetToCloud(value: number, targetListId = listId) {
+    if (!targetListId) return;
+
+    const { mes, ano } = getCurrentBudgetPeriod();
+    const { error } = await supabase
+      .from("orcamentos")
+      .upsert(
+        {
+          lista_id: targetListId,
+          mes,
+          ano,
+          valor: Number(value) || 0,
+          updated_at: new Date().toISOString()
+        },
+        { onConflict: "lista_id,mes,ano" }
+      );
+
+    if (error) throw error;
+  }
+
+  async function synchronizeBudget(preferLocal = false, targetListId = listId) {
+    if (!targetListId) return;
+
+    const localBudget = Number(localStorage.getItem(BUDGET_KEY) || monthlyBudget) || 0;
+    const cloudBudget = await pullBudgetFromCloud(targetListId);
+
+    if (cloudBudget !== null) {
+      setMonthlyBudget(cloudBudget);
+      localStorage.setItem(BUDGET_KEY, String(cloudBudget));
+      return;
+    }
+
+    if (preferLocal || localStorage.getItem(BUDGET_KEY) !== null) {
+      await pushBudgetToCloud(localBudget, targetListId);
+    }
+  }
+
   async function synchronizeHistory(preferLocal = false, targetListId = listId) {
     if (!targetListId) return;
 
@@ -647,6 +706,7 @@ export default function App() {
           }
 
           await synchronizeHistory(true, nextListId);
+          await synchronizeBudget(true, nextListId);
 
           const syncedAt = new Date().toISOString();
           localStorage.setItem(SYNC_LAST_SYNC_KEY, syncedAt);
@@ -730,7 +790,22 @@ export default function App() {
 
   useEffect(() => {
     localStorage.setItem(BUDGET_KEY, String(monthlyBudget));
-  }, [monthlyBudget]);
+
+    if (syncStatus !== "sincronizado" || !listId || !navigator.onLine) return;
+
+    const timer = window.setTimeout(async () => {
+      try {
+        await pushBudgetToCloud(monthlyBudget);
+        localStorage.setItem(SYNC_LAST_SYNC_KEY, new Date().toISOString());
+      } catch (error) {
+        console.error("Erro ao sincronizar orçamento:", error);
+        setSyncStatus(navigator.onLine ? "erro" : "offline");
+        setSyncError(error instanceof Error ? error.message : "Não foi possível sincronizar o orçamento.");
+      }
+    }, 500);
+
+    return () => window.clearTimeout(timer);
+  }, [monthlyBudget, listId, syncStatus]);
 
   const bought = items.filter(x => x.purchased).length;
   const pending = items.length - bought;
@@ -990,6 +1065,7 @@ export default function App() {
     ["Orçamento", BarChart3],
     ["Histórico de Preços", TrendingUp],
     ["Lista Inteligente", Sparkles],
+    ["Alertas", Bell],
     ["Configurações", Settings]
   ] as const;
 
@@ -1233,6 +1309,7 @@ export default function App() {
 
       const remoteHistory = await pullHistoryFromCloud(nextListId);
       setHistory(remoteHistory);
+      await synchronizeBudget(false, nextListId);
 
       setSyncStatus("sincronizado");
       setSyncMessage("Dispositivo vinculado. Lista e histórico carregados da nuvem.");
@@ -1282,6 +1359,7 @@ export default function App() {
 
       await synchronizeItems(false);
       await synchronizeHistory(false);
+      await synchronizeBudget(false);
 
       const syncedAt = new Date().toISOString();
       localStorage.setItem(SYNC_LAST_SYNC_KEY, syncedAt);
@@ -1301,6 +1379,7 @@ export default function App() {
       );
     } finally {
       syncInFlightRef.current = false;
+      setSyncingNow(false);
     }
   }
 
@@ -1468,6 +1547,144 @@ export default function App() {
       .slice(0, 12);
   }, [history, items]);
 
+  const smartAlerts = useMemo(() => {
+    type SmartAlert = {
+      id: string;
+      title: string;
+      description: string;
+      tone: "amber" | "red" | "emerald" | "blue";
+    };
+
+    const alerts: SmartAlert[] = [];
+    const now = new Date();
+
+    if (monthlyBudget > 0 && budgetPercent >= 80) {
+      alerts.push({
+        id: "budget",
+        title: budgetPercent >= 100 ? "Orçamento mensal atingido" : "Orçamento próximo do limite",
+        description: budgetPercent >= 100
+          ? `Você já utilizou ${Math.round(budgetPercent)}% do orçamento deste mês.`
+          : `Você já utilizou ${Math.round(budgetPercent)}% do orçamento deste mês.`,
+        tone: budgetPercent >= 100 ? "red" : "amber",
+      });
+    }
+
+    if (pending >= 8) {
+      alerts.push({
+        id: "pending",
+        title: "Muitos itens pendentes",
+        description: `Sua lista possui ${pending} produtos aguardando compra.`,
+        tone: "amber",
+      });
+    }
+
+    const priceAlerts = new Map<string, {
+      name: string;
+      previous: number;
+      latest: number;
+      change: number;
+    }>();
+
+    const priceStats = new Map<string, { name: string; prices: { date: string; price: number }[] }>();
+
+    history.forEach(purchase => {
+      purchase.items.forEach(item => {
+        const key = normalizeText(item.name);
+        if (!key) return;
+
+        const price = Number(item.unitPrice) || 0;
+        if (price <= 0) return;
+
+        const entry = priceStats.get(key) || { name: item.name, prices: [] };
+        entry.prices.push({ date: purchase.date, price });
+        priceStats.set(key, entry);
+      });
+    });
+
+    priceStats.forEach(entry => {
+      const ordered = [...entry.prices].sort(
+        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+      );
+
+      if (ordered.length < 2) return;
+
+      const previous = ordered[ordered.length - 2].price;
+      const latest = ordered[ordered.length - 1].price;
+      if (previous <= 0) return;
+
+      const change = ((latest - previous) / previous) * 100;
+
+      if (change >= 15) {
+        priceAlerts.set(entry.name, {
+          name: entry.name,
+          previous,
+          latest,
+          change,
+        });
+      }
+    });
+
+    Array.from(priceAlerts.values())
+      .sort((a, b) => b.change - a.change)
+      .slice(0, 2)
+      .forEach(alert => {
+        alerts.push({
+          id: `price-up-${normalizeText(alert.name)}`,
+          title: `Aumento de preço: ${alert.name}`,
+          description: `De ${money(alert.previous)} para ${money(alert.latest)} (+${Math.round(alert.change)}%).`,
+          tone: "red",
+        });
+      });
+
+    const favoriteLastPurchases = new Map<string, { name: string; date: string }>();
+
+    history.forEach(purchase => {
+      purchase.items.forEach(item => {
+        if (!item.favorite) return;
+
+        const key = normalizeText(item.name);
+        const current = favoriteLastPurchases.get(key);
+
+        if (!current || new Date(purchase.date).getTime() > new Date(current.date).getTime()) {
+          favoriteLastPurchases.set(key, {
+            name: item.name,
+            date: purchase.date,
+          });
+        }
+      });
+    });
+
+    Array.from(favoriteLastPurchases.values())
+      .map(item => ({
+        ...item,
+        days: Math.floor(
+          (now.getTime() - new Date(item.date).getTime()) / 86400000
+        ),
+      }))
+      .filter(item => item.days >= 30)
+      .sort((a, b) => b.days - a.days)
+      .slice(0, 2)
+      .forEach(item => {
+        alerts.push({
+          id: `favorite-${normalizeText(item.name)}`,
+          title: `Favorito sem comprar: ${item.name}`,
+          description: `A última compra registrada foi há ${item.days} dias.`,
+          tone: "blue",
+        });
+      });
+
+    if (alerts.length === 0) {
+      alerts.push({
+        id: "healthy",
+        title: "Tudo em ordem",
+        description: "Nenhum alerta importante foi identificado no momento.",
+        tone: "emerald",
+      });
+    }
+
+    return alerts.slice(0, 6);
+  }, [history, monthlyBudget, budgetPercent, pending]);
+
   async function addFrequentProduct(product: {
     name: string;
     category: string;
@@ -1542,7 +1759,7 @@ export default function App() {
             </div>
             <div>
               <b>Lista de Mercado</b>
-              <div className="text-xs text-slate-400">versão 1.3.3</div>
+              <div className="text-xs text-slate-400">versão 1.3.4</div>
             </div>
             <button
               className="ml-auto lg:hidden"
@@ -1586,6 +1803,50 @@ export default function App() {
       )}
 
       <main className="lg:ml-64">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+            <div className="flex min-w-0 items-center gap-3">
+              {syncingNow ? (
+                <Loader2 className="shrink-0 animate-spin text-blue-500" size={20} />
+              ) : syncStatus === "sincronizado" ? (
+                <Cloud className="shrink-0 text-emerald-500" size={20} />
+              ) : (
+                <CloudOff className="shrink-0 text-slate-400" size={20} />
+              )}
+              <div className="min-w-0">
+                <p className={`text-sm font-bold ${
+                  syncingNow
+                    ? "text-blue-700"
+                    : syncStatus === "sincronizado"
+                      ? "text-emerald-700"
+                      : syncStatus === "offline"
+                        ? "text-slate-600"
+                        : "text-red-700"
+                }`}>
+                  {syncingNow
+                    ? "Sincronizando..."
+                    : syncStatus === "sincronizado"
+                      ? "Sincronizado agora"
+                      : syncStatus === "offline"
+                        ? "Modo offline"
+                        : "Sincronização pendente"}
+                </p>
+                <p className="truncate text-xs text-slate-400">
+                  {lastSyncAt
+                    ? `Última sincronização: ${new Date(lastSyncAt).toLocaleTimeString("pt-BR")}`
+                    : "Nenhuma sincronização concluída ainda"}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => syncNow()}
+              disabled={syncingNow || syncStatus === "offline"}
+              className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {syncingNow ? "Sincronizando..." : "Sincronizar agora"}
+            </button>
+          </div>
+
         <header className="sticky top-0 z-20 flex h-16 items-center border-b border-slate-200 bg-white/95 px-4 sm:px-8">
           <button className="lg:hidden" onClick={() => setMobile(true)}>
             <Menu />
@@ -1687,6 +1948,46 @@ export default function App() {
                   value={money(total)}
                 />
               </div>
+
+              <section className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Bell className="text-amber-500" size={19} />
+                      <h2 className="font-bold">Alertas Inteligentes</h2>
+                    </div>
+                    <p className="mt-1 text-sm text-slate-400">
+                      Avisos gerados automaticamente com base na sua lista, orçamento e histórico.
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                    {smartAlerts.length}
+                  </span>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {smartAlerts.map(alert => {
+                    const toneClass = {
+                      amber: "border-amber-200 bg-amber-50 text-amber-800",
+                      red: "border-red-200 bg-red-50 text-red-800",
+                      emerald: "border-emerald-200 bg-emerald-50 text-emerald-800",
+                      blue: "border-blue-200 bg-blue-50 text-blue-800",
+                    }[alert.tone];
+
+                    return (
+                      <div key={alert.id} className={`rounded-xl border p-3 ${toneClass}`}>
+                        <div className="flex items-start gap-2">
+                          <Bell size={17} className="mt-0.5 shrink-0" />
+                          <div className="min-w-0">
+                            <p className="font-semibold">{alert.title}</p>
+                            <p className="mt-1 text-xs opacity-80">{alert.description}</p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
 
               <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -2424,6 +2725,53 @@ export default function App() {
                           ))}
                         </div>
                       )}
+                    </>
+                  ) : page === "Alertas" ? (
+                    <>
+                      <div className="mb-7">
+                        <p className="text-sm font-medium text-amber-600">
+                          Monitoramento automático
+                        </p>
+                        <h1 className="text-3xl font-bold">Alertas Inteligentes</h1>
+                        <p className="mt-2 text-slate-500">
+                          Acompanhe avisos importantes gerados a partir da sua lista, orçamento e histórico.
+                        </p>
+                      </div>
+
+                      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                        {smartAlerts.map(alert => {
+                          const toneClass = {
+                            amber: "border-amber-200 bg-amber-50 text-amber-800",
+                            red: "border-red-200 bg-red-50 text-red-800",
+                            emerald: "border-emerald-200 bg-emerald-50 text-emerald-800",
+                            blue: "border-blue-200 bg-blue-50 text-blue-800",
+                          }[alert.tone];
+
+                          return (
+                            <div
+                              key={alert.id}
+                              className={`rounded-2xl border p-5 shadow-sm ${toneClass}`}
+                            >
+                              <div className="flex items-start gap-3">
+                                <Bell size={20} className="mt-0.5 shrink-0" />
+                                <div>
+                                  <h2 className="font-bold">{alert.title}</h2>
+                                  <p className="mt-2 text-sm opacity-80">
+                                    {alert.description}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <button
+                        onClick={() => setPage("Dashboard")}
+                        className="mt-6 rounded-xl bg-emerald-500 px-4 py-2.5 font-semibold text-white"
+                      >
+                        Voltar ao Dashboard
+                      </button>
                     </>
                   ) : page === "Orçamento" ? (
                     <>
