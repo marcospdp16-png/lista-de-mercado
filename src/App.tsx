@@ -1,7 +1,7 @@
-// Lista de Mercado v1.2.0.8
+// Lista de Mercado v1.2.1
 // Sincronização da Lista de Compras com Supabase, mantendo localStorage como cache/offline.
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./lib/supabase";
 import {
   BarChart3, CheckCircle2, Circle, ClipboardList, LayoutDashboard,
@@ -178,6 +178,10 @@ export default function App() {
   const [syncMessage, setSyncMessage] = useState("");
   const [syncingItems, setSyncingItems] = useState(false);
   const [syncingHistory, setSyncingHistory] = useState(false);
+  const [lastSyncAt, setLastSyncAt] = useState<string>(() =>
+    localStorage.getItem(SYNC_LAST_SYNC_KEY) || ""
+  );
+  const syncInFlightRef = useRef(false);
 
   const [form, setForm] = useState({
     name: "",
@@ -575,7 +579,9 @@ export default function App() {
 
           await synchronizeHistory(true, nextListId);
 
-          localStorage.setItem(SYNC_LAST_SYNC_KEY, new Date().toISOString());
+          const syncedAt = new Date().toISOString();
+          localStorage.setItem(SYNC_LAST_SYNC_KEY, syncedAt);
+          setLastSyncAt(syncedAt);
           setSyncStatus("sincronizado");
         } catch (syncError) {
           console.error("Erro na sincronização inicial dos itens:", syncError);
@@ -1093,21 +1099,91 @@ export default function App() {
     e.currentTarget.value = "";
   }
 
-  async function syncNow() {
-    if (!listId) return;
+  async function syncNow(options: { silent?: boolean } = {}) {
+    if (!listId || !navigator.onLine || syncInFlightRef.current) return;
+
+    syncInFlightRef.current = true;
 
     try {
+      if (!options.silent) {
+        setSyncError("");
+        setSyncStatus("inicializando");
+        setSyncMessage("");
+      }
+
       await synchronizeItems(false);
       await synchronizeHistory(false);
+
+      const syncedAt = new Date().toISOString();
+      localStorage.setItem(SYNC_LAST_SYNC_KEY, syncedAt);
+      setLastSyncAt(syncedAt);
       setSyncStatus("sincronizado");
-      setSyncMessage("Lista e histórico sincronizados com a nuvem.");
-      localStorage.setItem(SYNC_LAST_SYNC_KEY, new Date().toISOString());
+
+      if (!options.silent) {
+        setSyncMessage("Lista e histórico sincronizados automaticamente.");
+      }
     } catch (error) {
       console.error("Erro ao sincronizar lista e histórico:", error);
       setSyncStatus(navigator.onLine ? "erro" : "offline");
-      setSyncError(error instanceof Error ? error.message : "Não foi possível sincronizar a lista e o histórico.");
+      setSyncError(
+        error instanceof Error
+          ? error.message
+          : "Não foi possível sincronizar a lista e o histórico."
+      );
+    } finally {
+      syncInFlightRef.current = false;
     }
   }
+
+  useEffect(() => {
+    if (!listId) return;
+
+    const syncWhenOnline = () => {
+      if (navigator.onLine) void syncNow({ silent: true });
+      else setSyncStatus("offline");
+    };
+
+    const syncWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        syncWhenOnline();
+      }
+    };
+
+    const handleOffline = () => {
+      setSyncStatus("offline");
+      setSyncMessage("Sem conexão. As alterações ficam salvas localmente.");
+    };
+
+    const handleOnline = () => {
+      setSyncStatus("inicializando");
+      setSyncMessage("Conexão restabelecida. Sincronizando...");
+      void syncNow({ silent: true });
+    };
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    document.addEventListener("visibilitychange", syncWhenVisible);
+
+    // Atualiza silenciosamente enquanto a página estiver aberta.
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === "visible" && navigator.onLine) {
+        void syncNow({ silent: true });
+      }
+    }, 60000);
+
+    if (!navigator.onLine) {
+      setSyncStatus("offline");
+    } else {
+      void syncNow({ silent: true });
+    }
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+      document.removeEventListener("visibilitychange", syncWhenVisible);
+      window.clearInterval(interval);
+    };
+  }, [listId]);
 
   return (
     <div className="min-h-screen bg-slate-50">
@@ -1121,7 +1197,7 @@ export default function App() {
             </div>
             <div>
               <b>Lista de Mercado</b>
-              <div className="text-xs text-slate-400">versão 1.2.0.8</div>
+              <div className="text-xs text-slate-400">versão 1.2.1</div>
             </div>
             <button
               className="ml-auto lg:hidden"
@@ -1984,7 +2060,7 @@ export default function App() {
                       </p>
                       <h1 className="text-3xl font-bold">Configurações</h1>
                       <p className="mt-2 text-slate-500">
-                        Sincronização dos itens entre seus dispositivos.
+                        Sincronização automática dos itens e histórico entre seus dispositivos.
                       </p>
                     </div>
 
@@ -1994,7 +2070,7 @@ export default function App() {
                           <div>
                             <h2 className="font-bold">Conexão com a nuvem</h2>
                             <p className="mt-1 text-sm text-slate-400">
-                              Supabase preparado para a próxima etapa de sincronização.
+                              Supabase conectado para sincronização automática.
                             </p>
                           </div>
 
@@ -2032,6 +2108,20 @@ export default function App() {
                             <span className="text-slate-500">Código de vinculação</span>
                             <b className="font-mono text-xs">
                               {linkCode || "Aguardando..."}
+                            </b>
+                          </div>
+                          <div className="flex justify-between gap-4">
+                            <span className="text-slate-500">Última sincronização</span>
+                            <b className="text-right text-xs">
+                              {lastSyncAt
+                                ? new Date(lastSyncAt).toLocaleString("pt-BR", {
+                                    day: "2-digit",
+                                    month: "2-digit",
+                                    year: "numeric",
+                                    hour: "2-digit",
+                                    minute: "2-digit"
+                                  })
+                                : "Ainda não sincronizado"}
                             </b>
                           </div>
                         </div>
