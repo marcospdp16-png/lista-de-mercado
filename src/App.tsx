@@ -1,10 +1,10 @@
-// Lista de Mercado v1.3.4.2
+// Lista de Mercado v1.3.5
 // Sincronização da Lista de Compras com Supabase, mantendo localStorage como cache/offline.
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./lib/supabase";
 import {
-  BarChart3, Bell, CheckCircle2, Circle, ClipboardList, LayoutDashboard, Cloud, CloudOff, Loader2,
+  BarChart3, Bell, CheckCircle2, Circle, ClipboardList, LayoutDashboard, Cloud, CloudOff, Loader2, RefreshCw,
   TrendingUp,
   ListChecks, Menu, Minus, Pencil, Plus, Search, Settings,
   ShoppingCart, Tags, Trash2, X, Star, Sparkles
@@ -1065,6 +1065,7 @@ export default function App() {
     ["Orçamento", BarChart3],
     ["Histórico de Preços", TrendingUp],
     ["Lista Inteligente", Sparkles],
+    ["Reposição Inteligente", RefreshCw],
     ["Alertas", Bell],
     ["Configurações", Settings]
   ] as const;
@@ -1486,65 +1487,43 @@ export default function App() {
   }, [history, items]);
 
   const intelligentProducts = useMemo(() => {
-    const pendingNames = new Set(
-      items.filter(item => !item.purchased).map(item => normalizeText(item.name))
-    );
+    const pendingNames = new Set(items.filter(item => !item.purchased).map(item => normalizeText(item.name)));
+    const stats = new Map<string, { name:string; category:string; unitPrice:number; purchases:number; lastDate:string; favorite:boolean }>();
+    history.forEach(purchase => purchase.items.forEach(item => {
+      const key=normalizeText(item.name); if(!key) return; const e=stats.get(key);
+      if(!e) stats.set(key,{name:item.name,category:item.category||detectCategory(item.name),unitPrice:Number(item.unitPrice)||0,purchases:1,lastDate:purchase.date,favorite:Boolean(item.favorite)});
+      else { e.purchases++; e.favorite=e.favorite||Boolean(item.favorite); if(new Date(purchase.date).getTime()>new Date(e.lastDate).getTime()){e.lastDate=purchase.date;e.unitPrice=Number(item.unitPrice)||e.unitPrice;e.category=item.category||e.category;} }
+    }));
+    const now=Date.now();
+    return Array.from(stats.values()).filter(p=>!pendingNames.has(normalizeText(p.name))).map(product=>{
+      const daysSince=Math.max(0,Math.floor((now-new Date(product.lastDate).getTime())/86400000));
+      const recencyScore=daysSince<=7?35:daysSince<=14?28:daysSince<=30?20:daysSince<=60?10:3;
+      const frequencyScore=Math.min(40,product.purchases*8), favoriteScore=product.favorite?25:0;
+      const score=Math.min(100,frequencyScore+recencyScore+favoriteScore);
+      const reason=product.favorite?"Favorito + comprado com frequência":product.purchases>=3?"Comprado com frequência":daysSince<=14?"Comprado recentemente":"Já comprado anteriormente";
+      return {...product,daysSince,score,reason};
+    }).sort((a,b)=>b.score-a.score||b.purchases-a.purchases||a.name.localeCompare(b.name,"pt-BR")).slice(0,12);
+  }, [history, items]);
 
-    const stats = new Map<string, {
-      name: string;
-      category: string;
-      unitPrice: number;
-      purchases: number;
-      lastDate: string;
-      favorite: boolean;
-    }>();
-
-    history.forEach(purchase => {
-      purchase.items.forEach(item => {
-        const key = normalizeText(item.name);
-        if (!key) return;
-        const existing = stats.get(key);
-        if (!existing) {
-          stats.set(key, {
-            name: item.name,
-            category: item.category || detectCategory(item.name),
-            unitPrice: Number(item.unitPrice) || 0,
-            purchases: 1,
-            lastDate: purchase.date,
-            favorite: Boolean(item.favorite),
-          });
-        } else {
-          existing.purchases += 1;
-          existing.favorite = existing.favorite || Boolean(item.favorite);
-          if (new Date(purchase.date).getTime() > new Date(existing.lastDate).getTime()) {
-            existing.lastDate = purchase.date;
-            existing.unitPrice = Number(item.unitPrice) || existing.unitPrice;
-            existing.category = item.category || existing.category;
-          }
-        }
-      });
-    });
-
-    const now = Date.now();
-    return Array.from(stats.values())
-      .filter(product => !pendingNames.has(normalizeText(product.name)))
-      .map(product => {
-        const daysSince = Math.max(0, Math.floor((now - new Date(product.lastDate).getTime()) / 86400000));
-        const recencyScore = daysSince <= 7 ? 35 : daysSince <= 14 ? 28 : daysSince <= 30 ? 20 : daysSince <= 60 ? 10 : 3;
-        const frequencyScore = Math.min(40, product.purchases * 8);
-        const favoriteScore = product.favorite ? 25 : 0;
-        const score = Math.min(100, frequencyScore + recencyScore + favoriteScore);
-        const reason = product.favorite
-          ? "Favorito + comprado com frequência"
-          : product.purchases >= 3
-            ? "Comprado com frequência"
-            : daysSince <= 14
-              ? "Comprado recentemente"
-              : "Já comprado anteriormente";
-        return { ...product, daysSince, score, reason };
-      })
-      .sort((a, b) => b.score - a.score || b.purchases - a.purchases || a.name.localeCompare(b.name, "pt-BR"))
-      .slice(0, 12);
+  const replenishmentProducts = useMemo(() => {
+    const pendingNames=new Set(items.filter(item=>!item.purchased).map(item=>normalizeText(item.name)));
+    const stats=new Map<string,{name:string;category:string;unitPrice:number;favorite:boolean;dates:string[]}>();
+    history.forEach(purchase=>purchase.items.forEach(item=>{
+      const key=normalizeText(item.name); if(!key) return; const e=stats.get(key);
+      if(!e) stats.set(key,{name:item.name,category:item.category||detectCategory(item.name),unitPrice:Number(item.unitPrice)||0,favorite:Boolean(item.favorite),dates:[purchase.date]});
+      else { e.dates.push(purchase.date); e.favorite=e.favorite||Boolean(item.favorite); if(new Date(purchase.date).getTime()>new Date(e.dates[e.dates.length-2]).getTime()){e.unitPrice=Number(item.unitPrice)||e.unitPrice;e.category=item.category||e.category;} }
+    }));
+    const now=Date.now();
+    return Array.from(stats.values()).filter(p=>p.dates.length>=2&&!pendingNames.has(normalizeText(p.name))).map(product=>{
+      const dates=[...product.dates].sort((a,b)=>new Date(a).getTime()-new Date(b).getTime());
+      const intervals=dates.slice(1).map((d,i)=>Math.max(1,Math.round((new Date(d).getTime()-new Date(dates[i]).getTime())/86400000)));
+      const averageInterval=intervals.reduce((sum,v)=>sum+v,0)/intervals.length;
+      const daysSince=Math.max(0,Math.floor((now-new Date(dates.at(-1)!).getTime())/86400000));
+      const due=daysSince>=Math.max(3,Math.round(averageInterval*0.85));
+      const dueRatio=daysSince/Math.max(averageInterval,1);
+      const confidence=Math.min(100,Math.round(dueRatio*55+Math.min(35,dates.length*7)+(product.favorite?10:0)));
+      return {...product,purchases:dates.length,lastDate:dates.at(-1)!,averageInterval:Math.round(averageInterval),daysSince,overdueDays:Math.round(daysSince-averageInterval),due,confidence,status:dueRatio>=1.25?"Provavelmente está na hora de comprar":"Próximo do período habitual de compra"};
+    }).filter(p=>p.due).sort((a,b)=>b.confidence-a.confidence||b.overdueDays-a.overdueDays).slice(0,12);
   }, [history, items]);
 
   const smartAlerts = useMemo(() => {
@@ -2726,7 +2705,103 @@ export default function App() {
                         </div>
                       )}
                     </>
+                  ) : page === "Reposição Inteligente" ? (
+                    <>
+                      <div className="mb-7">
+                        <p className="text-sm font-medium text-emerald-600">
+                          Previsão baseada no seu histórico
+                        </p>
+                        <h1 className="text-3xl font-bold">Reposição Inteligente</h1>
+                        <p className="mt-2 text-slate-500">
+                          Produtos recorrentes que chegaram ou estão próximos do intervalo habitual de compra.
+                        </p>
+                      </div>
+
+                      {!replenishmentProducts.length ? (
+                        <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
+                          <RefreshCw className="mx-auto text-slate-300" size={42} />
+                          <h2 className="mt-4 text-lg font-bold">Nenhuma reposição identificada</h2>
+                          <p className="mt-2 text-sm text-slate-500">
+                            O sistema precisa de pelo menos duas compras do mesmo produto para calcular um intervalo.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                          {replenishmentProducts.map(product => (
+                            <div key={normalizeText(product.name)} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    {product.favorite && <Star size={17} className="fill-amber-400 text-amber-400" />}
+                                    <h2 className="truncate font-bold text-slate-900">{product.name}</h2>
+                                  </div>
+                                  <p className="mt-1 text-xs text-slate-500">{product.category}</p>
+                                </div>
+                                <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">
+                                  {product.confidence}%
+                                </span>
+                              </div>
+
+                              <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+                                <div className="rounded-xl bg-slate-50 p-3">
+                                  <span className="text-slate-400">Intervalo médio</span>
+                                  <div className="mt-1 font-bold text-slate-800">{product.averageInterval} dias</div>
+                                </div>
+                                <div className="rounded-xl bg-slate-50 p-3">
+                                  <span className="text-slate-400">Último preço</span>
+                                  <div className="mt-1 font-bold text-slate-800">{money(product.unitPrice)}</div>
+                                </div>
+                              </div>
+
+                              <p className="mt-3 text-xs text-slate-500">
+                                🧠 {product.status} • última compra há {product.daysSince} dia(s)
+                              </p>
+                              <p className="mt-1 text-xs text-slate-400">
+                                {product.purchases} compras registradas • sem adição automática
+                              </p>
+
+                              <button
+                                type="button"
+                                onClick={() => void addFrequentProduct(product)}
+                                disabled={quickAddingName === product.name}
+                                className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-600 disabled:opacity-60"
+                              >
+                                <Plus size={17} />
+                                {quickAddingName === product.name ? "Adicionando..." : "Adicionar à lista"}
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  ) : page === "Reposição Inteligente" ? (
+                    <>
+                      <div className="mb-7">
+                        <p className="text-sm font-medium text-emerald-600">Previsão baseada no seu histórico</p>
+                        <h1 className="text-3xl font-bold">Reposição Inteligente</h1>
+                        <p className="mt-2 text-slate-500">Produtos recorrentes que chegaram ou estão próximos do intervalo habitual de compra.</p>
+                      </div>
+                      {!replenishmentProducts.length ? (
+                        <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
+                          <RefreshCw className="mx-auto text-slate-300" size={42} />
+                          <h2 className="mt-4 text-lg font-bold">Nenhuma reposição identificada</h2>
+                          <p className="mt-2 text-sm text-slate-500">O sistema precisa de pelo menos duas compras do mesmo produto para calcular um intervalo.</p>
+                        </div>
+                      ) : (
+                        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                          {replenishmentProducts.map(product => (
+                            <div key={normalizeText(product.name)} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                              <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex items-center gap-2">{product.favorite && <Star size={17} className="fill-amber-400 text-amber-400" />}<h2 className="truncate font-bold text-slate-900">{product.name}</h2></div><p className="mt-1 text-xs text-slate-500">{product.category}</p></div><span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700">{product.confidence}%</span></div>
+                              <div className="mt-4 grid grid-cols-2 gap-2 text-xs"><div className="rounded-xl bg-slate-50 p-3"><span className="text-slate-400">Intervalo médio</span><div className="mt-1 font-bold text-slate-800">{product.averageInterval} dias</div></div><div className="rounded-xl bg-slate-50 p-3"><span className="text-slate-400">Último preço</span><div className="mt-1 font-bold text-slate-800">{money(product.unitPrice)}</div></div></div>
+                              <p className="mt-3 text-xs text-slate-500">🧠 {product.status} • última compra há {product.daysSince} dia(s)</p><p className="mt-1 text-xs text-slate-400">{product.purchases} compras registradas • sem adição automática</p>
+                              <button type="button" onClick={() => void addFrequentProduct(product)} disabled={quickAddingName === product.name} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-600 disabled:opacity-60"><Plus size={17} />{quickAddingName === product.name ? "Adicionando..." : "Adicionar à lista"}</button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
                   ) : page === "Alertas" ? (
+
                     <>
                       <div className="mb-7">
                         <p className="text-sm font-medium text-amber-600">
