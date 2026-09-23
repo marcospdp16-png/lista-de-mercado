@@ -1,4 +1,4 @@
-// Lista de Mercado v1.3.6.1
+// Lista de Mercado v1.4.0.3
 // Sincronização da Lista de Compras com Supabase, mantendo localStorage como cache/offline.
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
@@ -1863,55 +1863,7 @@ export default function App() {
             </button>
           </div>
 
-        <header className="sticky top-0 z-20 flex h-16 items-center border-b border-slate-200 bg-white/95 px-4 sm:px-8">
-          <button className="lg:hidden" onClick={() => setMobile(true)}>
-            <Menu />
-          </button>
 
-          <span className="hidden text-sm font-medium text-slate-500 lg:block">
-            {page}
-          </span>
-
-          <div className="ml-auto flex items-center gap-3">
-            <div
-              title={syncError || "Identidade e lista inicializadas no Supabase"}
-              className={`hidden items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold sm:flex ${
-                syncStatus === "sincronizado"
-                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                  : syncStatus === "offline"
-                    ? "border-amber-200 bg-amber-50 text-amber-700"
-                    : syncStatus === "erro"
-                      ? "border-red-200 bg-red-50 text-red-700"
-                      : "border-slate-200 bg-slate-50 text-slate-600"
-              }`}
-            >
-              <span className={`h-2 w-2 rounded-full ${
-                syncStatus === "sincronizado"
-                  ? "bg-emerald-500"
-                  : syncStatus === "offline"
-                    ? "bg-amber-500"
-                    : syncStatus === "erro"
-                      ? "bg-red-500"
-                      : "bg-slate-400"
-              }`} />
-              {syncStatus === "sincronizado"
-                ? "Nuvem pronta"
-                : syncStatus === "offline"
-                  ? "Offline"
-                  : syncStatus === "erro"
-                    ? "Nuvem indisponível"
-                    : "Conectando..."}
-            </div>
-
-            <div className="hidden text-right sm:block">
-              <b className="text-sm">Minha lista</b>
-              <div className="text-xs text-slate-400">Compras do mês</div>
-            </div>
-            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-100 font-bold text-emerald-700">
-              M
-            </div>
-          </div>
-        </header>
 
         <section className="mx-auto max-w-7xl p-4 sm:p-8">
           {page === "Dashboard" ? (
@@ -1970,35 +1922,101 @@ export default function App() {
                 <p className="mb-1 text-sm font-medium text-emerald-600">
                   Boa tarde! 👋
                 </p>
-                <h1 className="text-3xl font-bold sm:text-4xl">
-                  Sua lista de mercado
-                </h1>
-                <p className="mt-2 text-slate-500">
-                  Aqui está o resumo da sua lista atual.
-                </p>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                  <div>
+                    <h1 className="text-3xl font-bold sm:text-4xl">Sua lista de mercado</h1>
+                    <p className="mt-2 text-slate-500">
+                      Uma visão rápida do que está acontecendo com suas compras.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShoppingMode(true)}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-600"
+                  >
+                    <ShoppingCart size={18} />
+                    Iniciar compras
+                  </button>
+                </div>
               </div>
 
-              <div className="grid w-full grid-cols-[repeat(4,minmax(0,1fr))] gap-1 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
-                <Stat
-                  icon={<ShoppingCart />}
-                  title="Itens na lista"
-                  value={String(items.length)}
-                />
-                <Stat
-                  icon={<Circle />}
-                  title="Pendentes"
-                  value={String(pending)}
-                />
-                <Stat
-                  icon={<CheckCircle2 />}
-                  title="Comprados"
-                  value={String(bought)}
-                />
-                <Stat
-                  icon={<BarChart3 />}
-                  title="Total estimado"
-                  value={money(total)}
-                />
+
+
+              <div className="mt-5 grid gap-5 lg:grid-cols-[1.35fr_1fr]">
+                <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="grid grid-cols-4 gap-2">
+                    <div className="rounded-xl bg-slate-50 p-3 text-center">
+                      <p className="text-xs text-slate-400">Pendentes</p>
+                      <p className="mt-1 font-bold text-slate-800">{pending}</p>
+                    </div>
+                    <div className="rounded-xl bg-slate-50 p-3 text-center">
+                      <p className="text-xs text-slate-400">Comprados</p>
+                      <p className="mt-1 font-bold text-emerald-700">{bought}</p>
+                    </div>
+                    <div className="rounded-xl bg-slate-50 p-3 text-center">
+                      <p className="text-xs text-slate-400">Itens</p>
+                      <p className="mt-1 font-bold text-slate-800">{items.length}</p>
+                    </div>
+                    <div className="rounded-xl bg-slate-50 p-3 text-center">
+                      <p className="text-xs text-slate-400">Total</p>
+                      <p className="mt-1 font-bold text-slate-800">{money(total)}</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-5 flex items-center justify-between gap-3">
+                    <div>
+                      <h2 className="font-bold">Resumo da lista</h2>
+                      <p className="mt-1 text-sm text-slate-400">
+                        {bought} de {items.length} item(ns) comprados
+                      </p>
+                    </div>
+                    <span className="text-lg font-bold text-emerald-600">
+                      {items.length ? Math.round((bought / items.length) * 100) : 0}%
+                    </span>
+                  </div>
+                  <div className="mt-4 h-3 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className="h-full rounded-full bg-emerald-500 transition-all"
+                      style={{ width: `${items.length ? (bought / items.length) * 100 : 0}%` }}
+                    />
+                  </div>
+
+                </section>
+
+                <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h2 className="font-bold">Visão do orçamento</h2>
+                      <p className="mt-1 text-sm text-slate-400">Gastos registrados neste mês.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setPage("Orçamento")}
+                      className="text-xs font-semibold text-emerald-700 hover:underline"
+                    >
+                      Ver orçamento →
+                    </button>
+                  </div>
+                  <div className="mt-4 flex items-end justify-between">
+                    <div>
+                      <p className="text-xs text-slate-400">Gasto no mês</p>
+                      <p className="text-2xl font-bold">{money(currentMonthSpent)}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xs text-slate-400">Orçamento</p>
+                      <p className="font-bold text-emerald-700">{money(monthlyBudget)}</p>
+                    </div>
+                  </div>
+                  <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-slate-100">
+                    <div
+                      className={`h-full rounded-full transition-all ${budgetPercent >= 100 ? "bg-red-500" : "bg-emerald-500"}`}
+                      style={{ width: `${Math.min(100, budgetPercent)}%` }}
+                    />
+                  </div>
+                  <p className="mt-2 text-xs text-slate-400">
+                    {Math.round(budgetPercent)}% utilizado · {money(budgetRemaining)} restante
+                  </p>
+                </section>
               </div>
 
               <section className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -2006,512 +2024,106 @@ export default function App() {
                   <div>
                     <div className="flex items-center gap-2">
                       <Bell className="text-amber-500" size={19} />
-                      <h2 className="font-bold">Alertas Inteligentes</h2>
+                      <h2 className="font-bold">Alertas</h2>
                     </div>
-                    <p className="mt-1 text-sm text-slate-400">
-                      Avisos gerados automaticamente com base na sua lista, orçamento e histórico.
-                    </p>
+                    <p className="mt-1 text-sm text-slate-400">O que merece sua atenção agora.</p>
                   </div>
-                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-                    {smartAlerts.length}
-                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPage("Alertas")}
+                    className="text-xs font-semibold text-emerald-700 hover:underline"
+                  >
+                    Ver todos →
+                  </button>
                 </div>
-
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  {smartAlerts.map(alert => {
+                  {smartAlerts.slice(0, 3).map(alert => {
                     const toneClass = {
                       amber: "border-amber-200 bg-amber-50 text-amber-800",
                       red: "border-red-200 bg-red-50 text-red-800",
                       emerald: "border-emerald-200 bg-emerald-50 text-emerald-800",
                       blue: "border-blue-200 bg-blue-50 text-blue-800",
                     }[alert.tone];
-
                     return (
                       <div key={alert.id} className={`rounded-xl border p-3 ${toneClass}`}>
-                        <div className="flex items-start gap-2">
-                          <Bell size={17} className="mt-0.5 shrink-0" />
-                          <div className="min-w-0">
-                            <p className="font-semibold">{alert.title}</p>
-                            <p className="mt-1 text-xs opacity-80">{alert.description}</p>
-                          </div>
-                        </div>
+                        <p className="font-semibold">{alert.title}</p>
+                        <p className="mt-1 text-xs opacity-80">{alert.description}</p>
                       </div>
                     );
                   })}
                 </div>
               </section>
 
-              <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <section className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="mb-4 flex items-center justify-between gap-3">
                   <div>
-                    <h2 className="font-bold">Progresso da lista</h2>
-                    <p className="text-sm text-slate-400">
-                      {bought} de {items.length} item(ns) comprados
-                    </p>
+                    <h2 className="font-bold">Ações inteligentes</h2>
+                    <p className="mt-1 text-sm text-slate-400">Atalhos para decidir o que comprar.</p>
                   </div>
-                  <span className="text-lg font-bold text-emerald-600">
-                    {items.length ? Math.round((bought / items.length) * 100) : 0}%
-                  </span>
                 </div>
-
-                <div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-100">
-                  <div
-                    className="h-full rounded-full bg-emerald-500 transition-all"
-                    style={{
-                      width: `${items.length ? (bought / items.length) * 100 : 0}%`
-                    }}
-                  />
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <button type="button" onClick={() => setPage("Lista Inteligente")} className="rounded-xl border border-slate-200 p-4 text-left hover:border-emerald-200 hover:bg-emerald-50">
+                    <Sparkles className="text-emerald-600" size={20} />
+                    <p className="mt-3 font-semibold">Lista Inteligente</p>
+                    <p className="mt-1 text-xs text-slate-400">Sugestões baseadas no histórico.</p>
+                  </button>
+                  <button type="button" onClick={() => setPage("Reposição Inteligente")} className="rounded-xl border border-slate-200 p-4 text-left hover:border-emerald-200 hover:bg-emerald-50">
+                    <RefreshCw className="text-emerald-600" size={20} />
+                    <p className="mt-3 font-semibold">Reposição</p>
+                    <p className="mt-1 text-xs text-slate-400">Produtos que podem estar na hora de comprar.</p>
+                  </button>
+                  <button type="button" onClick={() => setPage("Economia")} className="rounded-xl border border-slate-200 p-4 text-left hover:border-emerald-200 hover:bg-emerald-50">
+                    <PiggyBank className="text-emerald-600" size={20} />
+                    <p className="mt-3 font-semibold">Economia</p>
+                    <p className="mt-1 text-xs text-slate-400">{money(totalEstimatedSavings)} de economia estimada.</p>
+                  </button>
+                  <button type="button" onClick={() => setPage("Histórico")} className="rounded-xl border border-slate-200 p-4 text-left hover:border-emerald-200 hover:bg-emerald-50">
+                    <ListChecks className="text-emerald-600" size={20} />
+                    <p className="mt-3 font-semibold">Histórico</p>
+                    <p className="mt-1 text-xs text-slate-400">{history.length} compra(s) registrada(s).</p>
+                  </button>
                 </div>
-              </div>
+              </section>
 
-              <div className="mt-7 rounded-2xl border border-slate-200 bg-white shadow-sm">
-                <div className="flex flex-col gap-4 border-b border-slate-100 p-5 xl:flex-row xl:items-center xl:justify-between">
+              <section className="mt-5 rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="flex flex-col gap-3 border-b border-slate-100 p-5 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    {frequentProducts.length > 0 && (
-                    <section className="mb-5 rounded-2xl border border-amber-100 bg-amber-50/70 p-4">
-                      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          <h3 className="font-semibold text-slate-900">⚡ Compra rápida</h3>
-                          <p className="text-xs text-slate-600">
-                            Produtos que aparecem no seu histórico de compras.
-                          </p>
-                        </div>
-                        <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-amber-700">
-                          {frequentProducts.length} sugestões
-                        </span>
-                      </div>
-
-                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                        {frequentProducts.map(product => (
-                          <button
-                            key={normalizeText(product.name)}
-                            type="button"
-                            onClick={() => void addFrequentProduct(product)}
-                            disabled={quickAddingName === product.name}
-                            className="flex items-center justify-between gap-3 rounded-xl border border-amber-100 bg-white px-3 py-3 text-left transition hover:border-amber-300 hover:shadow-sm disabled:opacity-60"
-                          >
-                            <span className="min-w-0">
-                              <span className="flex items-center gap-1.5 truncate font-semibold text-slate-800">
-                                {product.favorite && <span className="text-amber-500">★</span>}
-                                {product.name}
-                              </span>
-                              <span className="text-xs text-slate-500">
-                                {product.purchases} {product.purchases === 1 ? "compra" : "compras"}
-                              </span>
-                            </span>
-                            <span className="shrink-0 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-sm font-bold text-emerald-700">
-                              {quickAddingName === product.name ? "..." : "+1"}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    </section>
-                  )}
-
-                  {priceEconomy.length > 0 && (
-                    <section className="mb-5 rounded-2xl border border-emerald-100 bg-emerald-50/60 p-5 shadow-sm">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <PiggyBank className="text-emerald-600" size={20} />
-                            <h2 className="font-bold text-slate-900">Comparação de Preços</h2>
-                          </div>
-                          <p className="mt-1 text-sm text-slate-600">
-                            Compare os preços da lista com sua média histórica.
-                          </p>
-                        </div>
-                        <div className="rounded-xl bg-white px-4 py-2 text-right shadow-sm">
-                          <p className="text-xs text-slate-400">Economia estimada</p>
-                          <p className="font-bold text-emerald-700">{money(totalEstimatedSavings)}</p>
-                        </div>
-                      </div>
-
-                      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                        {priceEconomy.slice(0, 6).map(item => (
-                          <div key={item.itemId} className="rounded-xl border border-white bg-white p-3 shadow-sm">
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <p className="truncate font-semibold">{item.name}</p>
-                                <p className="mt-1 text-xs text-slate-500">Qtd. {item.quantity}</p>
-                              </div>
-                              <span className={`rounded-full px-2 py-1 text-[11px] font-bold ${
-                                item.status === "abaixo"
-                                  ? "bg-emerald-100 text-emerald-700"
-                                  : item.status === "acima"
-                                    ? "bg-red-100 text-red-700"
-                                    : "bg-slate-100 text-slate-600"
-                              }`}>
-                                {item.status === "abaixo" ? "Abaixo da média" : item.status === "acima" ? "Acima da média" : "Na média"}
-                              </span>
-                            </div>
-                            <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                              <div><span className="text-slate-400">Atual</span><p className="font-bold">{money(item.current)}</p></div>
-                              <div><span className="text-slate-400">Média</span><p className="font-bold">{money(item.average)}</p></div>
-                            </div>
-                            <p className={`mt-3 text-xs font-semibold ${item.status === "abaixo" ? "text-emerald-700" : item.status === "acima" ? "text-red-600" : "text-slate-500"}`}>
-                              {item.status === "abaixo"
-                                ? `Economia de ${money(item.difference)} (${Math.abs(item.percent).toFixed(1).replace(".", ",")}%) por unidade`
-                                : item.status === "acima"
-                                  ? `${money(Math.abs(item.difference))} acima da média (${Math.abs(item.percent).toFixed(1).replace(".", ",")}%)`
-                                  : "Preço igual à média histórica"}
-                            </p>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
-                        <span>{itemsBelowAverage} item(ns) abaixo da média histórica.</span>
-                        <button type="button" onClick={() => setPage("Economia")} className="font-semibold text-emerald-700 hover:underline">Ver análise completa →</button>
-                      </div>
-                    </section>
-                  )}
-
-                  <h2 className="font-bold">Lista de Compras</h2>
-                    <p className="text-sm text-slate-400">
-                      {shown.length} item(ns) exibido(s)
-                    </p>
+                    <h2 className="font-bold">Lista de Compras</h2>
+                    <p className="mt-1 text-sm text-slate-400">{shown.length} item(ns) pendente(s)</p>
                   </div>
-
-                  <div className="flex flex-col gap-2 sm:flex-row">
-                    <button
-                      onClick={() => setShoppingMode(v => !v)}
-                      className={`inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold ${
-                        shoppingMode
-                          ? "bg-slate-900 text-white"
-                          : "border border-slate-200 bg-white text-slate-700"
-                      }`}
-                    >
-                      <ShoppingCart size={18} />
-                      {shoppingMode ? "Modo Compras ativo" : "Modo Compras"}
-                    </button>
-
-                    {bought > 0 && (
-                      <>
-                        <button
-                          onClick={finalizePurchase}
-                          className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-700"
-                        >
-                          <CheckCircle2 size={18} />
-                          Finalizar compra
-                        </button>
-
-                        <button
-                          onClick={clearPurchased}
-                          className="inline-flex items-center justify-center gap-2 rounded-xl border border-red-200 px-4 py-2.5 text-sm font-semibold text-red-600 hover:bg-red-50"
-                        >
-                          <Trash2 size={18} />
-                          Limpar comprados
-                        </button>
-                      </>
-                    )}
-
-                    <button
-                      onClick={openAdd}
-                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white"
-                    >
-                      <Plus size={18} />
-                      Adicionar produto
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShoppingMode(true)}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700"
+                  >
+                    <ShoppingCart size={16} />
+                    Abrir modo compras
+                  </button>
                 </div>
 
-                <div className="p-5">
-                  <div className="mb-4 rounded-xl border border-emerald-100 bg-emerald-50 p-4">
-                    <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-emerald-800">
-                      <Plus size={17} />
-                      Adição rápida
-                    </div>
-                    <input
-                      onKeyDown={quickAdd}
-                      placeholder="Digite o produto e pressione Enter..."
-                      className="w-full rounded-xl border border-emerald-200 bg-white px-4 py-3 outline-none focus:border-emerald-400"
-                    />
-                    <p className="mt-2 text-xs text-emerald-700">
-                      A categoria e o preço podem ser ajustados depois. Produtos conhecidos são categorizados automaticamente.
-                    </p>
+                {shown.length === 0 ? (
+                  <div className="p-8 text-center">
+                    <CheckCircle2 className="mx-auto text-emerald-500" size={32} />
+                    <p className="mt-2 font-semibold">Sua lista está em dia!</p>
+                    <p className="mt-1 text-sm text-slate-400">Não há produtos pendentes no momento.</p>
                   </div>
-
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                    <div className="relative w-full lg:max-w-md">
-                      <Search
-                        className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-                        size={18}
-                      />
-                      <input
-                        value={search}
-                        onChange={e => setSearch(e.target.value)}
-                        placeholder="Pesquisar produto..."
-                        className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-4 outline-none focus:border-emerald-400"
-                      />
-                    </div>
-
-                    <select
-                      value={categoryFilter}
-                      onChange={e => setCategoryFilter(e.target.value)}
-                      className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm outline-none focus:border-emerald-400"
-                    >
-                      <option>Todas</option>
-                      {categories.map(c => <option key={c}>{c}</option>)}
-                    </select>
-
-                    <div className="flex rounded-xl bg-slate-100 p-1">
-                      {(["Todos", "Pendentes", "Comprados", "Favoritos"] as Filter[]).map(f => (
-                        <button
-                          key={f}
-                          onClick={() => setFilter(f)}
-                          className={`rounded-lg px-3 py-2 text-xs font-semibold sm:px-4 ${
-                            filter === f
-                              ? "bg-white text-emerald-600 shadow-sm"
-                              : "text-slate-500"
-                          }`}
-                        >
-                          {f}
+                ) : (
+                  <div className="divide-y divide-slate-100">
+                    {shown.slice(0, 8).map(item => (
+                      <div key={item.id} className="flex items-center gap-3 px-5 py-3">
+                        <button type="button" onClick={() => toggle(item.id)} className="shrink-0 text-slate-300 hover:text-emerald-500">
+                          <Circle size={20} />
                         </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                    {groupedShown.map(group => (
-                      <button
-                        key={group.category}
-                        onClick={() => toggleCategory(group.category)}
-                        className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-emerald-200 hover:bg-emerald-50"
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="font-semibold">{group.category}</span>
-                          <span className="text-xs font-bold text-emerald-600">
-                            {group.items.length} item(ns)
-                          </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-semibold">{item.name}</p>
+                          <p className="text-xs text-slate-400">{item.category} · Qtd. {item.quantity}</p>
                         </div>
-                        <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-                          <span>{group.pending} pendente(s)</span>
-                          <b>{money(group.total)}</b>
-                        </div>
-                      </button>
+                        <span className="shrink-0 text-sm font-bold">{money(item.quantity * item.unitPrice)}</span>
+                      </div>
                     ))}
                   </div>
-
-                  <div className="mt-4 hidden overflow-x-auto md:block">
-                    <table className="w-full text-left text-sm">
-                      <thead>
-                        <tr className="border-b border-slate-100 text-xs uppercase tracking-wide text-slate-400">
-                          <th className="px-3 py-3">Status</th>
-                          <th className="px-3 py-3">Produto</th>
-                          <th className="px-3 py-3">Categoria</th>
-                          <th className="px-3 py-3">Qtd.</th>
-                          <th className="px-3 py-3">Preço</th>
-                          <th className="px-3 py-3 text-right">Total</th>
-                          <th className="px-3 py-3 text-right">Ações</th>
-                        </tr>
-                      </thead>
-
-                      <tbody>
-                        {groupedShown.map(group => (
-                          <Fragment key={group.category}>
-                            <tr className="border-y border-slate-100 bg-slate-50">
-                              <td colSpan={7} className="px-3 py-3">
-                                <button
-                                  onClick={() => toggleCategory(group.category)}
-                                  className="flex w-full items-center justify-between text-left"
-                                >
-                                  <span className="font-bold">{group.category}</span>
-                                  <span className="text-xs text-slate-500">
-                                    {group.items.length} item(ns) • {money(group.total)}
-                                  </span>
-                                </button>
-                              </td>
-                            </tr>
-
-                            {!collapsedCategories[group.category] &&
-                              group.items.map(x => (
-                                                                <tr
-                            key={x.id}
-                            className={`border-b border-slate-50 ${
-                              x.purchased ? "opacity-60" : ""
-                            }`}
-                          >
-                            <td className="px-3 py-4">
-                              <button onClick={() => toggle(x.id)}>
-                                {x.purchased
-                                  ? <CheckCircle2 className="text-emerald-500" />
-                                  : <Circle className="text-slate-300" />}
-                              </button>
-                            </td>
-
-                            <td className={`px-3 py-4 font-semibold ${
-                              x.purchased ? "line-through" : ""
-                            }`}>
-                              <div className="flex items-center gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => void toggleFavorite(x)}
-                                  className={`shrink-0 ${x.favorite ? "text-amber-500" : "text-slate-300 hover:text-amber-400"}`}
-                                  title={x.favorite ? "Remover dos favoritos" : "Adicionar aos favoritos"}
-                                  aria-label={x.favorite ? "Remover dos favoritos" : "Adicionar aos favoritos"}
-                                >
-                                  <Star size={17} fill={x.favorite ? "currentColor" : "none"} />
-                                </button>
-                                <span>{x.name}</span>
-                              </div>
-                            </td>
-
-                            <td className="px-3 py-4">
-                              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs">
-                                {x.category}
-                              </span>
-                            </td>
-
-                            <td className="px-3 py-4">
-                              <div className="inline-flex items-center rounded-lg border border-slate-200">
-                                <button
-                                  onClick={() => changeQuantity(x.id, -1)}
-                                  className="p-2 hover:bg-slate-100"
-                                >
-                                  <Minus size={15} />
-                                </button>
-                                <span className="min-w-9 text-center font-semibold">
-                                  {x.quantity}
-                                </span>
-                                <button
-                                  onClick={() => changeQuantity(x.id, 1)}
-                                  className="p-2 hover:bg-slate-100"
-                                >
-                                  <Plus size={15} />
-                                </button>
-                              </div>
-                            </td>
-
-                            <td className="px-3 py-4">{money(x.unitPrice)}</td>
-
-                            <td className="px-3 py-4 text-right font-semibold">
-                              {money(x.quantity * x.unitPrice)}
-                            </td>
-
-                            <td className="px-3 py-4">
-                              <div className="flex justify-end gap-1">
-                                <button
-                                  onClick={() => openEdit(x)}
-                                  className="rounded-lg p-2 hover:bg-slate-100"
-                                >
-                                  <Pencil size={17} />
-                                </button>
-                                <button
-                                  onClick={() => del(x.id)}
-                                  className="rounded-lg p-2 text-red-600 hover:bg-red-50"
-                                >
-                                  <Trash2 size={17} />
-                                </button>
-                              </div>
-                            </td>
-                                </tr>
-                              ))}
-                          </Fragment>
-                        ))}
-                      </tbody>
-                    </table>
-
-                    {!shown.length && <Empty />}
-                  </div>
-
-                  <div className="mt-4 space-y-3 md:hidden">
-                    {groupedShown.map(group => (
-                      <Fragment key={group.category}>
-                        <button
-                          onClick={() => toggleCategory(group.category)}
-                          className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-slate-50 p-4 text-left"
-                        >
-                          <span className="font-bold">{group.category}</span>
-                          <span className="text-xs text-slate-500">
-                            {group.items.length} • {money(group.total)}
-                          </span>
-                        </button>
-
-                        {!collapsedCategories[group.category] &&
-                          group.items.map(x => (
-                                                        <div
-                        key={x.id}
-                        className={`rounded-xl border p-4 ${
-                          x.purchased
-                            ? "border-slate-100 bg-slate-50"
-                            : "border-emerald-100 bg-white"
-                        }`}
-                      >
-                              <div className="flex items-start gap-3">
-                          <button onClick={() => toggle(x.id)}>
-                            {x.purchased
-                              ? <CheckCircle2 className="text-emerald-500" />
-                              : <Circle className="text-slate-300" />}
-                          </button>
-
-                                <div className="flex-1">
-                            <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => void toggleFavorite(x)}
-                                className={`shrink-0 ${x.favorite ? "text-amber-500" : "text-slate-300 hover:text-amber-400"}`}
-                                title={x.favorite ? "Remover dos favoritos" : "Adicionar aos favoritos"}
-                                aria-label={x.favorite ? "Remover dos favoritos" : "Adicionar aos favoritos"}
-                              >
-                                <Star size={17} fill={x.favorite ? "currentColor" : "none"} />
-                              </button>
-                              <b className={x.purchased ? "line-through" : ""}>
-                                {x.name}
-                              </b>
-                            </div>
-                                  <div className="text-xs text-slate-400">
-                              {x.category}
-                                  </div>
-                                </div>
-
-                          <b>{money(x.quantity * x.unitPrice)}</b>
-                              </div>
-
-                              <div className="mt-3 flex items-center justify-between border-t pt-3">
-                                <div className="inline-flex items-center rounded-lg border border-slate-200 bg-white">
-                            <button
-                              onClick={() => changeQuantity(x.id, -1)}
-                              className="p-2"
-                            >
-                              <Minus size={15} />
-                            </button>
-                            <span className="min-w-9 text-center font-semibold">
-                              {x.quantity}
-                            </span>
-                            <button
-                              onClick={() => changeQuantity(x.id, 1)}
-                              className="p-2"
-                            >
-                              <Plus size={15} />
-                            </button>
-                                </div>
-
-                                <div className="flex gap-2">
-                            <button
-                              onClick={() => openEdit(x)}
-                              className="inline-flex gap-1 px-3 py-2 text-xs"
-                            >
-                              <Pencil size={14} />
-                              Editar
-                            </button>
-                            <button
-                              onClick={() => del(x.id)}
-                              className="inline-flex gap-1 px-3 py-2 text-xs text-red-600"
-                            >
-                              <Trash2 size={14} />
-                              Excluir
-                            </button>
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                      </Fragment>
-                    ))}
-
-                    {!shown.length && <Empty />}
-                  </div>
-                </div>
-              </div>
+                )}
+              </section>
             </>
             )
           ) : (
