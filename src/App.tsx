@@ -1,4 +1,4 @@
-// Lista de Mercado v1.3.5
+// Lista de Mercado v1.3.6.1
 // Sincronização da Lista de Compras com Supabase, mantendo localStorage como cache/offline.
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
@@ -7,7 +7,7 @@ import {
   BarChart3, Bell, CheckCircle2, Circle, ClipboardList, LayoutDashboard, Cloud, CloudOff, Loader2, RefreshCw,
   TrendingUp,
   ListChecks, Menu, Minus, Pencil, Plus, Search, Settings,
-  ShoppingCart, Tags, Trash2, X, Star, Sparkles
+  ShoppingCart, Tags, Trash2, X, Star, Sparkles, PiggyBank
 } from "lucide-react";
 
 type Item = {
@@ -961,6 +961,42 @@ export default function App() {
     return priceProducts.filter(product => !query || normalizeText(product.name).includes(query));
   }, [priceProducts, priceSearch]);
 
+  const priceEconomy = useMemo(() => {
+    return items
+      .filter(item => !item.purchased && Number(item.unitPrice) > 0)
+      .map(item => {
+        const key = normalizeText(item.name);
+        const product = priceProducts.find(p => p.key === key);
+        if (!product || product.records.length === 0 || product.average <= 0) return null;
+
+        const current = Number(item.unitPrice) || 0;
+        const difference = product.average - current;
+        const percent = product.average > 0 ? (difference / product.average) * 100 : 0;
+        const estimated = Math.max(0, difference) * item.quantity;
+
+        return {
+          itemId: item.id,
+          name: item.name,
+          quantity: item.quantity,
+          current,
+          average: product.average,
+          min: product.min,
+          difference,
+          percent,
+          estimated,
+          status: current < product.average ? "abaixo" : current > product.average ? "acima" : "media" as const
+        };
+      })
+      .filter(Boolean) as Array<{
+        itemId: number; name: string; quantity: number; current: number; average: number;
+        min: number; difference: number; percent: number; estimated: number;
+        status: "abaixo" | "acima" | "media"
+      }>;
+  }, [items, priceProducts]);
+
+  const totalEstimatedSavings = priceEconomy.reduce((sum, item) => sum + item.estimated, 0);
+  const itemsBelowAverage = priceEconomy.filter(item => item.status === "abaixo").length;
+
   const selectedPrice = priceProducts.find(p => p.key === selectedPriceProduct) || filteredPriceProducts[0] || null;
 
 
@@ -1064,6 +1100,7 @@ export default function App() {
     ["Histórico", ListChecks],
     ["Orçamento", BarChart3],
     ["Histórico de Preços", TrendingUp],
+    ["Economia", PiggyBank],
     ["Lista Inteligente", Sparkles],
     ["Reposição Inteligente", RefreshCw],
     ["Alertas", Bell],
@@ -1878,21 +1915,57 @@ export default function App() {
 
         <section className="mx-auto max-w-7xl p-4 sm:p-8">
           {page === "Dashboard" ? (
-            <>
-              {shoppingMode && (
-                <div className="mb-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-                  <div className="flex items-center gap-3">
-                    <ShoppingCart className="text-emerald-600" size={22} />
+            shoppingMode ? (
+              <section className="space-y-5">
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                  <div className="flex items-center justify-between gap-3">
                     <div>
-                      <p className="font-bold text-emerald-800">Modo Compras ativo</p>
-                      <p className="text-sm text-emerald-700">
-                        Mostrando apenas os produtos que ainda faltam comprar.
-                      </p>
+                      <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Modo de Compras</p>
+                      <h1 className="mt-1 text-2xl font-bold text-slate-900">🛒 Lista de Compras</h1>
+                      <p className="mt-1 text-sm text-slate-600">Mostrando somente os itens que ainda precisam ser comprados.</p>
                     </div>
+                    <span className="rounded-full bg-white px-3 py-1.5 text-sm font-bold text-emerald-700 shadow-sm">
+                      {pending} pendente{pending === 1 ? "" : "s"}
+                    </span>
                   </div>
                 </div>
-              )}
-
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <div>
+                      <h2 className="font-bold">Itens da lista</h2>
+                      <p className="text-xs text-slate-400">Toque no item para marcar como comprado.</p>
+                    </div>
+                    <button type="button" onClick={() => setShoppingMode(false)} className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700">Sair do modo</button>
+                  </div>
+                  {shown.length === 0 ? (
+                    <div className="rounded-xl bg-slate-50 p-8 text-center">
+                      <CheckCircle2 className="mx-auto text-emerald-500" size={34} />
+                      <p className="mt-3 font-semibold text-slate-800">Lista concluída!</p>
+                      <p className="mt-1 text-sm text-slate-400">Não há itens pendentes para comprar.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {shown.map(item => (
+                        <div key={item.id} className="flex items-center gap-3 rounded-xl border border-slate-200 p-3">
+                          <button type="button" onClick={() => toggle(item.id)} className="shrink-0 text-emerald-600" aria-label={`Marcar ${item.name} como comprado`}><Circle size={23} /></button>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate font-semibold text-slate-800">{item.name}</p>
+                            <p className="text-xs text-slate-400">{item.category} · {money(item.unitPrice)} cada</p>
+                          </div>
+                          <div className="flex items-center gap-1 rounded-lg bg-slate-50 p-1">
+                            <button type="button" onClick={() => changeQuantity(item.id, -1)} className="rounded-md p-1.5 text-slate-600"><Minus size={15} /></button>
+                            <span className="min-w-7 text-center text-sm font-bold">{item.quantity}</span>
+                            <button type="button" onClick={() => changeQuantity(item.id, 1)} className="rounded-md p-1.5 text-slate-600"><Plus size={15} /></button>
+                          </div>
+                          <span className="hidden shrink-0 font-bold text-slate-800 sm:block">{money(item.quantity * item.unitPrice)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </section>
+            ) : (
+            <>
               <div className="mb-7">
                 <p className="mb-1 text-sm font-medium text-emerald-600">
                   Boa tarde! 👋
@@ -2031,6 +2104,64 @@ export default function App() {
                             </span>
                           </button>
                         ))}
+                      </div>
+                    </section>
+                  )}
+
+                  {priceEconomy.length > 0 && (
+                    <section className="mb-5 rounded-2xl border border-emerald-100 bg-emerald-50/60 p-5 shadow-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <PiggyBank className="text-emerald-600" size={20} />
+                            <h2 className="font-bold text-slate-900">Comparação de Preços</h2>
+                          </div>
+                          <p className="mt-1 text-sm text-slate-600">
+                            Compare os preços da lista com sua média histórica.
+                          </p>
+                        </div>
+                        <div className="rounded-xl bg-white px-4 py-2 text-right shadow-sm">
+                          <p className="text-xs text-slate-400">Economia estimada</p>
+                          <p className="font-bold text-emerald-700">{money(totalEstimatedSavings)}</p>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                        {priceEconomy.slice(0, 6).map(item => (
+                          <div key={item.itemId} className="rounded-xl border border-white bg-white p-3 shadow-sm">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="truncate font-semibold">{item.name}</p>
+                                <p className="mt-1 text-xs text-slate-500">Qtd. {item.quantity}</p>
+                              </div>
+                              <span className={`rounded-full px-2 py-1 text-[11px] font-bold ${
+                                item.status === "abaixo"
+                                  ? "bg-emerald-100 text-emerald-700"
+                                  : item.status === "acima"
+                                    ? "bg-red-100 text-red-700"
+                                    : "bg-slate-100 text-slate-600"
+                              }`}>
+                                {item.status === "abaixo" ? "Abaixo da média" : item.status === "acima" ? "Acima da média" : "Na média"}
+                              </span>
+                            </div>
+                            <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                              <div><span className="text-slate-400">Atual</span><p className="font-bold">{money(item.current)}</p></div>
+                              <div><span className="text-slate-400">Média</span><p className="font-bold">{money(item.average)}</p></div>
+                            </div>
+                            <p className={`mt-3 text-xs font-semibold ${item.status === "abaixo" ? "text-emerald-700" : item.status === "acima" ? "text-red-600" : "text-slate-500"}`}>
+                              {item.status === "abaixo"
+                                ? `Economia de ${money(item.difference)} (${Math.abs(item.percent).toFixed(1).replace(".", ",")}%) por unidade`
+                                : item.status === "acima"
+                                  ? `${money(Math.abs(item.difference))} acima da média (${Math.abs(item.percent).toFixed(1).replace(".", ",")}%)`
+                                  : "Preço igual à média histórica"}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
+                        <span>{itemsBelowAverage} item(ns) abaixo da média histórica.</span>
+                        <button type="button" onClick={() => setPage("Economia")} className="font-semibold text-emerald-700 hover:underline">Ver análise completa →</button>
                       </div>
                     </section>
                   )}
@@ -2382,6 +2513,7 @@ export default function App() {
                 </div>
               </div>
             </>
+            )
           ) : (
             <div className="mx-auto max-w-5xl">
               {page === "Histórico" ? (
@@ -2638,6 +2770,62 @@ export default function App() {
                           </div>
                         </>
                       )}
+                    </>
+                  ) : page === "Economia" ? (
+                    <>
+                      <div className="mb-7">
+                        <p className="text-sm font-medium text-emerald-600">Análise financeira</p>
+                        <h1 className="text-3xl font-bold">Comparação de Preços e Economia</h1>
+                        <p className="mt-2 text-slate-500">Compare os preços atuais da lista com o histórico registrado.
+                        </p>
+                      </div>
+
+                      {!priceEconomy.length ? (
+                        <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
+                          <PiggyBank className="mx-auto text-slate-300" size={42} />
+                          <h2 className="mt-4 text-lg font-bold">Ainda não há dados para comparar</h2>
+                          <p className="mt-2 text-sm text-slate-500">
+                            Adicione preços aos itens da lista e tenha histórico de compras para gerar a análise.
+                          </p>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                            <SummaryCard title="Itens analisados" value={String(priceEconomy.length)} subtitle="Com histórico de preços" />
+                            <SummaryCard title="Abaixo da média" value={String(itemsBelowAverage)} subtitle="Oportunidades de economia" />
+                            <SummaryCard title="Economia estimada" value={money(totalEstimatedSavings)} subtitle="Se os preços atuais forem mantidos" />
+                            <SummaryCard title="Itens na média/acima" value={String(priceEconomy.length - itemsBelowAverage)} subtitle="Sem economia estimada" />
+                          </div>
+
+                          <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                            <div className="space-y-3">
+                              {priceEconomy.map(item => (
+                                <div key={item.itemId} className="rounded-xl border border-slate-100 p-4">
+                                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                    <div>
+                                      <p className="font-bold">{item.name}</p>
+                                      <p className="mt-1 text-xs text-slate-500">Qtd. {item.quantity} · Menor histórico {money(item.min)}</p>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4 text-right text-sm sm:grid-cols-3">
+                                      <div><p className="text-xs text-slate-400">Atual</p><p className="font-bold">{money(item.current)}</p></div>
+                                      <div><p className="text-xs text-slate-400">Média</p><p className="font-bold">{money(item.average)}</p></div>
+                                      <div><p className="text-xs text-slate-400">Diferença</p><p className={`font-bold ${item.status === "abaixo" ? "text-emerald-600" : item.status === "acima" ? "text-red-600" : "text-slate-500"}`}>{item.difference > 0 ? "-" : item.difference < 0 ? "+" : ""}{money(Math.abs(item.difference))}</p></div>
+                                    </div>
+                                  </div>
+                                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+                                    <span className={`font-semibold ${item.status === "abaixo" ? "text-emerald-700" : item.status === "acima" ? "text-red-600" : "text-slate-500"}`}>
+                                      {item.status === "abaixo" ? `📉 ${Math.abs(item.percent).toFixed(1).replace(".", ",")}% abaixo da média` : item.status === "acima" ? `📈 ${Math.abs(item.percent).toFixed(1).replace(".", ",")}% acima da média` : "Preço na média histórica"}
+                                    </span>
+                                    {item.status === "abaixo" && <span className="font-semibold text-emerald-700">Economia potencial: {money(item.estimated)}</span>}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </>
+                      )}
+
+                      <button onClick={() => setPage("Dashboard")} className="mt-6 rounded-xl bg-emerald-500 px-4 py-2.5 font-semibold text-white">Voltar ao Dashboard</button>
                     </>
                   ) : page === "Lista Inteligente" ? (
                     <>
