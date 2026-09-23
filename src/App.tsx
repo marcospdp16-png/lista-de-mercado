@@ -1,4 +1,4 @@
-// Lista de Mercado v1.4.1.1
+// Lista de Mercado v1.4.2
 // Sincronização da Lista de Compras com Supabase, mantendo localStorage como cache/offline.
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
@@ -2481,11 +2481,29 @@ export default function App() {
                               Gastos, categorias, produtos e evolução das compras.
                             </p>
                           </div>
-                          <select
-                            value={reportMonth}
-                            onChange={e => setReportMonth(e.target.value)}
-                            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                          >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setReportMonth("Todos")}
+                              className={`rounded-xl px-3 py-2 text-xs font-semibold ${reportMonth === "Todos" ? "bg-emerald-500 text-white" : "border border-slate-200 bg-white text-slate-600"}`}
+                            >
+                              Todos
+                            </button>
+                            {reportData.months.slice(-3).map(month => (
+                              <button
+                                key={`quick-${month}`}
+                                type="button"
+                                onClick={() => setReportMonth(month)}
+                                className={`rounded-xl px-3 py-2 text-xs font-semibold ${reportMonth === month ? "bg-emerald-500 text-white" : "border border-slate-200 bg-white text-slate-600"}`}
+                              >
+                                {new Date(`${month}-01T12:00:00`).toLocaleDateString("pt-BR", { month: "short" }).replace(".", "")}
+                              </button>
+                            ))}
+                            <select
+                              value={reportMonth}
+                              onChange={e => setReportMonth(e.target.value)}
+                              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                            >
                             <option value="Todos">Todos os períodos</option>
                             {reportData.months.map(month => (
                               <option key={month} value={month}>
@@ -2496,6 +2514,7 @@ export default function App() {
                               </option>
                             ))}
                           </select>
+                          </div>
                         </div>
                       </div>
 
@@ -2544,18 +2563,20 @@ export default function App() {
                                 <h2 className="font-bold">Evolução mensal</h2>
                                 <p className="mt-1 text-sm text-slate-400">Últimos meses com registros.</p>
                               </div>
-                              <div className="flex h-56 items-end gap-3">
-                                {reportData.monthly.map(point => {
-                                  const max = Math.max(...reportData.monthly.map(x => x.total), 1);
-                                  const height = Math.max(8, (point.total / max) * 100);
-                                  return (
-                                    <div key={point.month} className="flex min-w-0 flex-1 flex-col items-center justify-end gap-2">
-                                      <span className="text-[10px] font-semibold text-slate-500">{money(point.total)}</span>
-                                      <div className="w-full max-w-10 rounded-t-lg bg-emerald-500" style={{ height: `${height}%` }} />
-                                      <span className="truncate text-[10px] text-slate-400">{point.label}</span>
-                                    </div>
-                                  );
-                                })}
+                              <div className="overflow-x-auto pb-2">
+                                <div className="flex h-56 min-w-[420px] items-end gap-3">
+                                  {reportData.monthly.map(point => {
+                                    const max = Math.max(...reportData.monthly.map(x => x.total), 1);
+                                    const height = Math.max(8, (point.total / max) * 100);
+                                    return (
+                                      <div key={point.month} className="flex min-w-12 flex-1 flex-col items-center justify-end gap-2">
+                                        <span className="text-[10px] font-semibold text-slate-500">{money(point.total)}</span>
+                                        <div className="w-8 rounded-t-lg bg-emerald-500 transition-all" style={{ height: `${height}%` }} />
+                                        <span className="text-[10px] text-slate-400">{point.label}</span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               </div>
                             </section>
                           </div>
@@ -2570,10 +2591,23 @@ export default function App() {
                                 <div key={normalizeText(product.name)} className="flex items-center gap-3 py-3">
                                   <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-sm font-bold text-emerald-700">{index + 1}</span>
                                   <div className="min-w-0 flex-1">
-                                    <p className="truncate font-semibold">{product.name}</p>
+                                    <div className="flex items-center justify-between gap-3">
+                                      <p className="truncate font-semibold">{product.name}</p>
+                                      <span className="shrink-0 text-sm font-bold">{money(product.total)}</span>
+                                    </div>
                                     <p className="text-xs text-slate-400">{product.purchases} compra(s) · {product.quantity} unidade(s)</p>
+                                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                                      <div
+                                        className="h-full rounded-full bg-emerald-500"
+                                        style={{
+                                          width: `${Math.min(
+                                            100,
+                                            (product.purchases / Math.max(reportData.products[0]?.purchases || 1, 1)) * 100
+                                          )}%`
+                                        }}
+                                      />
+                                    </div>
                                   </div>
-                                  <span className="shrink-0 text-sm font-bold">{money(product.total)}</span>
                                 </div>
                               ))}
                             </div>
