@@ -1,4 +1,4 @@
-// Lista de Mercado v1.4.0.3
+// Lista de Mercado v1.4.1.1
 // Sincronização da Lista de Compras com Supabase, mantendo localStorage como cache/offline.
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
@@ -1093,6 +1093,83 @@ export default function App() {
     0
   );
 
+
+  const [reportMonth, setReportMonth] = useState("Todos");
+
+  const reportData = useMemo(() => {
+    const records = reportMonth === "Todos"
+      ? history
+      : history.filter(record => record.date.slice(0, 7) === reportMonth);
+
+    let totalSpent = 0;
+    let totalQuantity = 0;
+    const categoryMap = new Map<string, { total: number; quantity: number }>();
+    const productMap = new Map<string, { name: string; total: number; quantity: number; purchases: number }>();
+    const monthMap = new Map<string, number>();
+
+    records.forEach(record => {
+      totalSpent += Number(record.total) || 0;
+      totalQuantity += Number(record.itemCount) || 0;
+
+      const monthKey = record.date.slice(0, 7);
+      monthMap.set(monthKey, (monthMap.get(monthKey) || 0) + (Number(record.total) || 0));
+
+      record.items.forEach(item => {
+        const itemTotal = (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0);
+        const category = categoryMap.get(item.category) || { total: 0, quantity: 0 };
+        category.total += itemTotal;
+        category.quantity += Number(item.quantity) || 0;
+        categoryMap.set(item.category, category);
+
+        const key = normalizeText(item.name);
+        const product = productMap.get(key) || {
+          name: item.name,
+          total: 0,
+          quantity: 0,
+          purchases: 0,
+        };
+        product.total += itemTotal;
+        product.quantity += Number(item.quantity) || 0;
+        product.purchases += 1;
+        productMap.set(key, product);
+      });
+    });
+
+    const categories = Array.from(categoryMap.entries())
+      .map(([name, value]) => ({ name, ...value }))
+      .sort((a, b) => b.total - a.total);
+
+    const products = Array.from(productMap.values())
+      .sort((a, b) => b.purchases - a.purchases || b.total - a.total)
+      .slice(0, 8);
+
+    const monthly = Array.from(monthMap.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .slice(-6)
+      .map(([month, total]) => ({
+        month,
+        label: new Date(`${month}-01T12:00:00`).toLocaleDateString("pt-BR", {
+          month: "short",
+          year: "2-digit",
+        }),
+        total,
+      }));
+
+    const months = Array.from(new Set(history.map(record => record.date.slice(0, 7))))
+      .sort((a, b) => b.localeCompare(a));
+
+    return {
+      records,
+      totalSpent,
+      totalQuantity,
+      averagePurchase: records.length ? totalSpent / records.length : 0,
+      categories,
+      products,
+      monthly,
+      months,
+    };
+  }, [history, reportMonth]);
+
   const nav = [
     ["Dashboard", LayoutDashboard],
     ["Lista de Compras", ClipboardList],
@@ -1101,6 +1178,7 @@ export default function App() {
     ["Orçamento", BarChart3],
     ["Histórico de Preços", TrendingUp],
     ["Economia", PiggyBank],
+    ["Relatórios", BarChart3],
     ["Lista Inteligente", Sparkles],
     ["Reposição Inteligente", RefreshCw],
     ["Alertas", Bell],
@@ -1818,8 +1896,17 @@ export default function App() {
         />
       )}
 
+      <button
+        type="button"
+        onClick={() => setMobile(true)}
+        aria-label="Abrir menu"
+        className="fixed left-3 top-3 z-50 flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm lg:hidden"
+      >
+        <Menu size={20} />
+      </button>
+
       <main className="lg:ml-64">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 pl-16 shadow-sm">
             <div className="flex min-w-0 items-center gap-3">
               {syncingNow ? (
                 <Loader2 className="shrink-0 animate-spin text-blue-500" size={20} />
@@ -2380,6 +2467,117 @@ export default function App() {
                               </div>
                             )}
                           </div>
+                        </>
+                      )}
+                    </>
+                  ) : page === "Relatórios" ? (
+                    <>
+                      <div className="mb-7">
+                        <p className="text-sm font-medium text-emerald-600">Análise das suas compras</p>
+                        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                          <div>
+                            <h1 className="text-3xl font-bold">Relatórios</h1>
+                            <p className="mt-2 text-slate-500">
+                              Gastos, categorias, produtos e evolução das compras.
+                            </p>
+                          </div>
+                          <select
+                            value={reportMonth}
+                            onChange={e => setReportMonth(e.target.value)}
+                            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                          >
+                            <option value="Todos">Todos os períodos</option>
+                            {reportData.months.map(month => (
+                              <option key={month} value={month}>
+                                {new Date(`${month}-01T12:00:00`).toLocaleDateString("pt-BR", {
+                                  month: "long",
+                                  year: "numeric",
+                                })}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                        <SummaryCard title="Total gasto" value={money(reportData.totalSpent)} subtitle={reportMonth === "Todos" ? "Todo o histórico" : "Período selecionado"} />
+                        <SummaryCard title="Compras" value={String(reportData.records.length)} subtitle="Registros no período" />
+                        <SummaryCard title="Média por compra" value={money(reportData.averagePurchase)} subtitle="Valor médio" />
+                        <SummaryCard title="Itens comprados" value={String(reportData.totalQuantity)} subtitle="Quantidade registrada" />
+                      </div>
+
+                      {!reportData.records.length ? (
+                        <div className="mt-5 rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
+                          <BarChart3 className="mx-auto text-slate-300" size={42} />
+                          <h2 className="mt-4 text-lg font-bold">Ainda não há dados para este período</h2>
+                          <p className="mt-2 text-sm text-slate-500">Finalize uma compra para começar a gerar os relatórios.</p>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="mt-5 grid gap-5 lg:grid-cols-2">
+                            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                              <div className="mb-5">
+                                <h2 className="font-bold">Gastos por categoria</h2>
+                                <p className="mt-1 text-sm text-slate-400">Distribuição dos valores registrados.</p>
+                              </div>
+                              <div className="space-y-4">
+                                {reportData.categories.map(category => {
+                                  const percent = reportData.totalSpent ? (category.total / reportData.totalSpent) * 100 : 0;
+                                  return (
+                                    <div key={category.name}>
+                                      <div className="mb-1 flex items-center justify-between gap-3 text-sm">
+                                        <span className="font-medium">{category.name}</span>
+                                        <span className="font-semibold">{money(category.total)}</span>
+                                      </div>
+                                      <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                                        <div className="h-full rounded-full bg-emerald-500" style={{ width: `${Math.min(100, percent)}%` }} />
+                                      </div>
+                                      <p className="mt-1 text-xs text-slate-400">{Math.round(percent)}% · {category.quantity} unidade(s)</p>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </section>
+
+                            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                              <div className="mb-5">
+                                <h2 className="font-bold">Evolução mensal</h2>
+                                <p className="mt-1 text-sm text-slate-400">Últimos meses com registros.</p>
+                              </div>
+                              <div className="flex h-56 items-end gap-3">
+                                {reportData.monthly.map(point => {
+                                  const max = Math.max(...reportData.monthly.map(x => x.total), 1);
+                                  const height = Math.max(8, (point.total / max) * 100);
+                                  return (
+                                    <div key={point.month} className="flex min-w-0 flex-1 flex-col items-center justify-end gap-2">
+                                      <span className="text-[10px] font-semibold text-slate-500">{money(point.total)}</span>
+                                      <div className="w-full max-w-10 rounded-t-lg bg-emerald-500" style={{ height: `${height}%` }} />
+                                      <span className="truncate text-[10px] text-slate-400">{point.label}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </section>
+                          </div>
+
+                          <section className="mt-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                            <div className="mb-5">
+                              <h2 className="font-bold">Produtos mais comprados</h2>
+                              <p className="mt-1 text-sm text-slate-400">Ordenados pela frequência registrada.</p>
+                            </div>
+                            <div className="divide-y divide-slate-100">
+                              {reportData.products.map((product, index) => (
+                                <div key={normalizeText(product.name)} className="flex items-center gap-3 py-3">
+                                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-sm font-bold text-emerald-700">{index + 1}</span>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="truncate font-semibold">{product.name}</p>
+                                    <p className="text-xs text-slate-400">{product.purchases} compra(s) · {product.quantity} unidade(s)</p>
+                                  </div>
+                                  <span className="shrink-0 text-sm font-bold">{money(product.total)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </section>
                         </>
                       )}
                     </>
