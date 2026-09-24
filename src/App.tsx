@@ -1,4 +1,4 @@
-// Lista de Mercado v1.4.2
+// Lista de Mercado v1.4.2.7
 // Sincronização da Lista de Compras com Supabase, mantendo localStorage como cache/offline.
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
@@ -1185,10 +1185,65 @@ export default function App() {
     ["Configurações", Settings]
   ] as const;
 
-  function toggle(id: number) {
-    setItems(v =>
-      v.map(x => x.id === id ? withUpdatedAt({ ...x, purchased: !x.purchased }) : x)
-    );
+  async function toggle(id: number) {
+    const current = items.find(item => item.id === id);
+    if (!current) return;
+
+    // Item já comprado não pode ser marcado novamente na interface de compras.
+    if (current.purchased) return;
+
+    const nextPurchased = true;
+    const updatedItem = withUpdatedAt({
+      ...current,
+      purchased: nextPurchased,
+    });
+
+    const nextItems = items.map(x => x.id === id ? updatedItem : x);
+
+    // Atualiza a interface imediatamente.
+    setItems(nextItems);
+
+    // Grava explicitamente o estado "comprado" na nuvem.
+    if (updatedItem.cloudId && listId && navigator.onLine) {
+      try {
+        const { error } = await supabase
+          .from("itens")
+          .update({
+            comprado: nextPurchased,
+            updated_at: updatedItem.updatedAt,
+          })
+          .eq("id", updatedItem.cloudId)
+          .eq("lista_id", listId);
+
+        if (error) throw error;
+
+        localStorage.setItem(SYNC_LAST_SYNC_KEY, new Date().toISOString());
+        setSyncStatus("sincronizado");
+        setSyncMessage(`"${updatedItem.name}" marcado como comprado.`);
+      } catch (error) {
+        console.error("Erro ao atualizar estado de compra:", error);
+        setSyncStatus("erro");
+        setSyncError(
+          error instanceof Error
+            ? error.message
+            : "Não foi possível atualizar o estado do item."
+        );
+      }
+    }
+
+    // Quando este era o último pendente, oferece o fechamento da compra.
+    const wasLastPending = items.filter(x => !x.purchased).length === 1;
+    if (wasLastPending) {
+      window.setTimeout(() => {
+        const confirmClose = window.confirm(
+          "Todos os itens da lista foram marcados como comprados.\n\nDeseja concluir esta compra e enviá-la para o Histórico?"
+        );
+
+        if (confirmClose) {
+          finalizePurchase(nextItems.filter(x => x.purchased));
+        }
+      }, 150);
+    }
   }
 
   function changeQuantity(id: number, delta: number) {
@@ -1344,8 +1399,12 @@ export default function App() {
     }
   }
 
-  function finalizePurchase() {
-    const purchasedItems = items.filter(x => x.purchased);
+  function deleteItem(id: number) {
+    del(id);
+  }
+
+  function finalizePurchase(purchasedItemsOverride?: Item[]) {
+    const purchasedItems = purchasedItemsOverride || items.filter(x => x.purchased);
     if (!purchasedItems.length) return;
 
     const purchase: PurchaseHistory = {
@@ -1361,7 +1420,8 @@ export default function App() {
 
     purchasedItems.forEach(x => void deleteCloudItem(x.cloudId));
     setHistory(v => [purchase, ...v]);
-    setItems(v => v.filter(x => !x.purchased));
+    setItems(v => v.filter(x => !purchasedItems.some(purchased => purchased.id === x.id)));
+    setSyncMessage("Compra concluída e enviada para o Histórico.");
 
     if (listId && syncStatus === "sincronizado") {
       window.setTimeout(() => {
@@ -2016,14 +2076,24 @@ export default function App() {
                       Uma visão rápida do que está acontecendo com suas compras.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setShoppingMode(true)}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-600"
-                  >
-                    <ShoppingCart size={18} />
-                    Iniciar compras
-                  </button>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <button
+                      type="button"
+                      onClick={openAdd}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm font-semibold text-emerald-700 shadow-sm hover:bg-emerald-50"
+                    >
+                      <Plus size={18} />
+                      Adicionar produto
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShoppingMode(true)}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-600"
+                    >
+                      <ShoppingCart size={18} />
+                      Iniciar compras
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -2067,6 +2137,21 @@ export default function App() {
                       style={{ width: `${items.length ? (bought / items.length) * 100 : 0}%` }}
                     />
                   </div>
+                  {bought > 0 && (
+                    <div className="mt-4 flex flex-col gap-3 rounded-xl border border-emerald-100 bg-emerald-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-sm font-semibold text-emerald-800">{bought} item(ns) já comprado(s)</p>
+                        <p className="text-xs text-emerald-700">Você pode concluir a compra agora e registrar esses itens no Histórico.</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => finalizePurchase()}
+                        className="rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-600"
+                      >
+                        Concluir compra
+                      </button>
+                    </div>
+                  )}
 
                 </section>
 
@@ -2173,41 +2258,33 @@ export default function App() {
               </section>
 
               <section className="mt-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-                  <div className="relative min-w-0 flex-1">
-                    <Search
-                      className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-                      size={18}
-                    />
-                    <input
-                      value={search}
-                      onChange={e => setSearch(e.target.value)}
-                      placeholder="Pesquisar produto..."
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-4 text-sm outline-none focus:border-emerald-400"
-                    />
-                  </div>
-
+                <div className="grid gap-3 lg:grid-cols-[1.4fr_auto_auto]">
+                  <input
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                    placeholder="Pesquisar produto..."
+                    className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-emerald-400"
+                  />
                   <div className="flex flex-wrap gap-2">
                     {(["Todos", "Pendentes", "Comprados", "Favoritos"] as Filter[]).map(option => (
                       <button
                         key={option}
                         type="button"
                         onClick={() => setFilter(option)}
-                        className={`rounded-xl px-3 py-2 text-xs font-semibold transition ${
+                        className={`rounded-xl px-3 py-2 text-xs font-semibold ${
                           filter === option
                             ? "bg-emerald-500 text-white"
-                            : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                            : "border border-slate-200 bg-white text-slate-600"
                         }`}
                       >
                         {option}
                       </button>
                     ))}
                   </div>
-
                   <select
                     value={categoryFilter}
                     onChange={e => setCategoryFilter(e.target.value)}
-                    className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-400"
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm"
                   >
                     <option value="Todas">Todas as categorias</option>
                     {categories.map(category => (
@@ -2221,7 +2298,7 @@ export default function App() {
                 <div className="flex flex-col gap-3 border-b border-slate-100 p-5 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <h2 className="font-bold">Lista de Compras</h2>
-                    <p className="mt-1 text-sm text-slate-400">{shown.length} item(ns) pendente(s)</p>
+                    <p className="mt-1 text-sm text-slate-400">{shown.length} item(ns) exibido(s) · {pending} pendente(s) · {bought} comprado(s)</p>
                   </div>
                   <button
                     type="button"
@@ -2231,6 +2308,16 @@ export default function App() {
                     <ShoppingCart size={16} />
                     Abrir modo compras
                   </button>
+                  {bought > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => finalizePurchase()}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-600"
+                    >
+                      <CheckCircle2 size={16} />
+                      Concluir compra
+                    </button>
+                  )}
                 </div>
 
                 {shown.length === 0 ? (
@@ -2241,10 +2328,16 @@ export default function App() {
                   </div>
                 ) : (
                   <div className="divide-y divide-slate-100">
-                    {shown.slice(0, 8).map(item => (
+                    {shown.map(item => (
                       <div key={item.id} className="flex items-center gap-3 px-5 py-3">
-                        <button type="button" onClick={() => toggle(item.id)} className="shrink-0 text-slate-300 hover:text-emerald-500">
-                          <Circle size={20} />
+                        <button
+                          type="button"
+                          onClick={() => toggle(item.id)}
+                          disabled={item.purchased}
+                          className={`shrink-0 ${item.purchased ? "cursor-default text-emerald-500" : "text-slate-300 hover:text-emerald-500"}`}
+                          aria-label={item.purchased ? `${item.name} já está comprado` : `Marcar ${item.name} como comprado`}
+                        >
+                          {item.purchased ? <CheckCircle2 size={20} /> : <Circle size={20} />}
                         </button>
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-sm font-semibold">{item.name}</p>
@@ -2257,16 +2350,14 @@ export default function App() {
                             onClick={() => openEdit(item)}
                             className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
                             aria-label={`Editar ${item.name}`}
-                            title="Editar"
                           >
                             <Pencil size={16} />
                           </button>
                           <button
                             type="button"
-                            onClick={() => del(item.id)}
+                            onClick={() => deleteItem(item.id)}
                             className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600"
                             aria-label={`Excluir ${item.name}`}
-                            title="Excluir"
                           >
                             <Trash2 size={16} />
                           </button>
@@ -2282,44 +2373,34 @@ export default function App() {
             <div className="mx-auto max-w-5xl">
               {page === "Lista de Compras" ? (
                 <>
-                  <div className="mb-7">
-                    <p className="text-sm font-medium text-emerald-600">Sua lista completa</p>
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                      <div>
-                        <h1 className="text-3xl font-bold">Lista de Compras</h1>
-                        <p className="mt-2 text-slate-500">
-                          Pesquise, filtre, edite e acompanhe todos os itens da sua lista.
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={openAdd}
-                        className="rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white"
-                      >
-                        + Adicionar item
-                      </button>
+                  <div className="mb-7 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-emerald-600">Sua lista completa</p>
+                      <h1 className="text-3xl font-bold">Lista de Compras</h1>
+                      <p className="mt-2 text-slate-500">Gerencie produtos, quantidades, preços e status da compra.</p>
                     </div>
+                    <button
+                      type="button"
+                      onClick={openAdd}
+                      className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white"
+                    >
+                      <Plus size={18} />
+                      Adicionar produto
+                    </button>
                   </div>
 
-                  <div className="mb-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-                      <div className="relative min-w-0 flex-1">
-                        <Search
-                          className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-                          size={18}
-                        />
-                        <input
-                          value={search}
-                          onChange={e => setSearch(e.target.value)}
-                          placeholder="Pesquisar produto..."
-                          className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-4 text-sm outline-none focus:border-emerald-400"
-                        />
-                      </div>
-
+                  <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="grid gap-3 lg:grid-cols-[1.4fr_auto_auto]">
+                      <input
+                        value={search}
+                        onChange={e => setSearch(e.target.value)}
+                        placeholder="Pesquisar produto..."
+                        className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-emerald-400"
+                      />
                       <div className="flex flex-wrap gap-2">
                         {(["Todos", "Pendentes", "Comprados", "Favoritos"] as Filter[]).map(option => (
                           <button
-                            key={`list-${option}`}
+                            key={option}
                             type="button"
                             onClick={() => setFilter(option)}
                             className={`rounded-xl px-3 py-2 text-xs font-semibold ${
@@ -2332,91 +2413,69 @@ export default function App() {
                           </button>
                         ))}
                       </div>
-
                       <select
                         value={categoryFilter}
                         onChange={e => setCategoryFilter(e.target.value)}
-                        className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-400"
+                        className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm"
                       >
                         <option value="Todas">Todas as categorias</option>
                         {categories.map(category => (
-                          <option key={`page-${category}`} value={category}>{category}</option>
+                          <option key={category} value={category}>{category}</option>
                         ))}
                       </select>
                     </div>
-                  </div>
+                  </section>
 
-                  <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <section className="mt-5 rounded-2xl border border-slate-200 bg-white shadow-sm">
                     {shown.length === 0 ? (
                       <div className="p-10 text-center">
                         <ClipboardList className="mx-auto text-slate-300" size={42} />
-                        <h2 className="mt-3 font-bold">Nenhum item encontrado</h2>
-                        <p className="mt-1 text-sm text-slate-400">
-                          Ajuste os filtros ou adicione um novo produto.
-                        </p>
+                        <h2 className="mt-3 font-bold">Nenhum produto encontrado</h2>
+                        <p className="mt-1 text-sm text-slate-400">Adicione um produto ou ajuste os filtros.</p>
+                        <button
+                          type="button"
+                          onClick={openAdd}
+                          className="mt-5 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white"
+                        >
+                          Adicionar produto
+                        </button>
                       </div>
                     ) : (
                       <div className="divide-y divide-slate-100">
                         {shown.map(item => (
-                          <div
-                            key={item.id}
-                            className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center"
-                          >
+                          <div key={item.id} className="flex flex-wrap items-center gap-3 p-4">
                             <button
                               type="button"
-                              onClick={() => toggle(item.id)}
+                              onClick={() => !item.purchased && void toggle(item.id)}
+                              disabled={item.purchased}
                               className={`shrink-0 ${item.purchased ? "text-emerald-500" : "text-slate-300 hover:text-emerald-500"}`}
-                              aria-label={item.purchased ? `Desmarcar ${item.name}` : `Marcar ${item.name} como comprado`}
+                              aria-label={item.purchased ? `${item.name} já comprado` : `Marcar ${item.name} como comprado`}
                             >
                               {item.purchased ? <CheckCircle2 size={22} /> : <Circle size={22} />}
                             </button>
-
                             <div className="min-w-0 flex-1">
-                              <p className={`font-semibold ${item.purchased ? "text-slate-400 line-through" : "text-slate-800"}`}>
-                                {item.name}
-                              </p>
-                              <p className="text-xs text-slate-400">
-                                {item.category} · {money(item.unitPrice)} cada
-                              </p>
+                              <p className={`font-semibold ${item.purchased ? "text-slate-400 line-through" : "text-slate-800"}`}>{item.name}</p>
+                              <p className="text-xs text-slate-400">{item.category} · {money(item.unitPrice)} cada</p>
                             </div>
-
                             <div className="flex items-center gap-1 rounded-lg bg-slate-50 p-1">
-                              <button type="button" onClick={() => changeQuantity(item.id, -1)} className="rounded-md p-1.5 text-slate-600 hover:bg-white">
-                                <Minus size={15} />
-                              </button>
-                              <span className="min-w-8 text-center text-sm font-bold">{item.quantity}</span>
-                              <button type="button" onClick={() => changeQuantity(item.id, 1)} className="rounded-md p-1.5 text-slate-600 hover:bg-white">
-                                <Plus size={15} />
-                              </button>
+                              <button type="button" onClick={() => changeQuantity(item.id, -1)} disabled={item.purchased} className="rounded-md p-1.5 text-slate-600 disabled:opacity-40"><Minus size={15} /></button>
+                              <span className="min-w-7 text-center text-sm font-bold">{item.quantity}</span>
+                              <button type="button" onClick={() => changeQuantity(item.id, 1)} disabled={item.purchased} className="rounded-md p-1.5 text-slate-600 disabled:opacity-40"><Plus size={15} /></button>
                             </div>
-
-                            <span className="shrink-0 font-bold">{money(item.quantity * item.unitPrice)}</span>
-
-                            <div className="flex shrink-0 items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => openEdit(item)}
-                                className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                                aria-label={`Editar ${item.name}`}
-                                title="Editar"
-                              >
-                                <Pencil size={17} />
+                            <span className="text-sm font-bold">{money(item.quantity * item.unitPrice)}</span>
+                            <div className="flex items-center gap-1">
+                              <button type="button" onClick={() => openEdit(item)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label={`Editar ${item.name}`}>
+                                <Pencil size={16} />
                               </button>
-                              <button
-                                type="button"
-                                onClick={() => del(item.id)}
-                                className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600"
-                                aria-label={`Excluir ${item.name}`}
-                                title="Excluir"
-                              >
-                                <Trash2 size={17} />
+                              <button type="button" onClick={() => deleteItem(item.id)} className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600" aria-label={`Excluir ${item.name}`}>
+                                <Trash2 size={16} />
                               </button>
                             </div>
                           </div>
                         ))}
                       </div>
                     )}
-                  </div>
+                  </section>
                 </>
               ) : page === "Histórico" ? (
                 <>
