@@ -1,4 +1,4 @@
-// Lista de Mercado v1.4.2.7
+// Lista de Mercado v1.5.0
 // Sincronização da Lista de Compras com Supabase, mantendo localStorage como cache/offline.
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
@@ -24,6 +24,14 @@ type Item = {
 
 type Filter = "Todos" | "Pendentes" | "Comprados" | "Favoritos";
 
+type SavedList = {
+  id: string;
+  cloudId?: string;
+  name: string;
+  items: Omit<Item, "id" | "cloudId" | "updatedAt" | "purchased">[];
+  updatedAt: string;
+};
+
 type PurchaseHistory = {
   id: number;
   cloudId?: string;
@@ -40,6 +48,7 @@ const SYNC_LIST_ID_KEY = "lista-mercado-sync-list-id-v1";
 const SYNC_CODE_KEY = "lista-mercado-sync-code-v1";
 const SYNC_LAST_SYNC_KEY = "lista-mercado-sync-last-v1";
 const DELETED_ITEMS_KEY = "lista-mercado-deleted-items-v1";
+const SAVED_LISTS_KEY = "lista-mercado-saved-lists-v1";
 
 type SyncStatus = "inicializando" | "sincronizado" | "offline" | "erro";
 
@@ -148,6 +157,17 @@ export default function App() {
       return initial;
     }
   });
+
+  const [savedLists, setSavedLists] = useState<SavedList[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(SAVED_LISTS_KEY) || "[]");
+    } catch {
+      return [];
+    }
+  });
+  const [savedListName, setSavedListName] = useState("");
+  const [savedListModal, setSavedListModal] = useState(false);
+  const [savedListEditId, setSavedListEditId] = useState<string | null>(null);
 
   const [page, setPage] = useState("Dashboard");
   const [search, setSearch] = useState("");
@@ -415,6 +435,187 @@ export default function App() {
         ? { ...purchase, cloudId: String(remote.id) }
         : purchase;
     });
+  }
+
+  async function pullSavedListsFromCloud(targetListId = listId) {
+    if (!targetListId) return [];
+    const { data, error } = await supabase
+      .from("listas_modelos")
+      .select("id, nome, itens, updated_at")
+      .eq("lista_id", targetListId)
+      .order("updated_at", { ascending: false });
+    if (error) throw error;
+    return (data || []).map((row: any) => ({
+      id: String(row.id),
+      cloudId: String(row.id),
+      name: String(row.nome),
+      items: Array.isArray(row.itens) ? row.itens : [],
+      updatedAt: String(row.updated_at || new Date().toISOString())
+    })) as SavedList[];
+  }
+
+  async function pushSavedListsToCloud(currentLists: SavedList[], targetListId = listId) {
+    if (!targetListId) return currentLists;
+    const result: SavedList[] = [];
+    for (const saved of currentLists) {
+      const payload = {
+        lista_id: targetListId,
+        nome: saved.name,
+        itens: saved.items,
+        updated_at: saved.updatedAt
+      };
+      if (saved.cloudId) {
+        const { error } = await supabase.from("listas_modelos").update(payload).eq("id", saved.cloudId).eq("lista_id", targetListId);
+        if (error) throw error;
+        result.push(saved);
+      } else {
+        const { data, error } = await supabase.from("listas_modelos").insert(payload).select("id, updated_at").single();
+        if (error) throw error;
+        result.push({ ...saved, cloudId: data?.id ? String(data.id) : undefined, id: data?.id ? String(data.id) : saved.id, updatedAt: String(data?.updated_at || saved.updatedAt) });
+      }
+    }
+    return result;
+  }
+
+  async function syncSavedLists(targetListId = listId, localLists = savedLists) {
+    if (!targetListId || !navigator.onLine) return;
+
+    try {
+      const cloud = await pullSavedListsFromCloud(targetListId);
+      const cloudById = new Map(cloud.map(list => [list.cloudId || list.id, list]));
+      const cloudByName = new Map(cloud.map(list => [normalizeText(list.name), list]));
+      const localOnly: SavedList[] = [];
+      const merged = new Map<string, SavedList>();
+
+      // Primeiro preserva tudo o que já existe na nuvem.
+      cloud.forEach(list => merged.set(list.cloudId || list.id, list));
+
+      // Depois reconcilia o que existe localmente. Listas novas são inseridas;
+      // listas já vinculadas à nuvem são atualizadas sem apagar as demais.
+      for (const local of localLists) {
+        const cloudMatch = local.cloudId
+          ? cloudById.get(local.cloudId)
+          : cloudByName.get(normalizeText(local.name));
+
+        if (cloudMatch) {
+          // O estado local só vence quando foi alterado depois da versão remota.
+          const localTime = new Date(local.updatedAt).getTime();
+          const cloudTime = new Date(cloudMatch.updatedAt).getTime();
+          if (Number.isFinite(localTime) && localTime > cloudTime) {
+            localOnly.push({ ...local, cloudId: cloudMatch.cloudId || cloudMatch.id, id: cloudMatch.id });
+          } else {
+            merged.set(cloudMatch.cloudId || cloudMatch.id, cloudMatch);
+          }
+        } else {
+          localOnly.push(local);
+        }
+      }
+
+      if (localOnly.length) {
+        const uploaded = await pushSavedListsToCloud(localOnly, targetListId);
+        uploaded.forEach(list => merged.set(list.cloudId || list.id, list));
+      }
+
+      const result = Array.from(merged.values()).sort(
+        (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      );
+
+      setSavedLists(result);
+    } catch (error) {
+      console.error("Erro ao sincronizar listas salvas:", error);
+      setSyncError(error instanceof Error ? error.message : "Não foi possível sincronizar as listas salvas.");
+    }
+  }
+
+  async function deleteSavedList(saved: SavedList) {
+    if (!confirm(`Excluir a lista salva "${saved.name}"?`)) return;
+    if (saved.cloudId && listId && navigator.onLine) {
+      try {
+        const { error } = await supabase.from("listas_modelos").delete().eq("id", saved.cloudId).eq("lista_id", listId);
+        if (error) throw error;
+      } catch (error) {
+        console.error("Erro ao excluir lista salva:", error);
+        setSyncError(error instanceof Error ? error.message : "Não foi possível excluir a lista salva.");
+        return;
+      }
+    }
+    setSavedLists(current => current.filter(x => x.id !== saved.id));
+  }
+
+  function saveCurrentAsList() {
+    const name = savedListName.trim();
+    if (!name) return;
+    if (savedListEditId) {
+      const now = new Date().toISOString();
+      setSavedLists(current => current.map(x => x.id === savedListEditId ? { ...x, name, updatedAt: now } : x));
+      setSavedListName("");
+      setSavedListEditId(null);
+      setSavedListModal(false);
+      setSyncMessage(`Lista renomeada para "${name}".`);
+      return;
+    }
+    if (!items.length) {
+      alert("A lista atual está vazia. Adicione produtos antes de salvar um modelo.");
+      return;
+    }
+    const now = new Date().toISOString();
+    const snapshot = items.map(item => ({
+      name: item.name,
+      category: item.category,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      favorite: Boolean(item.favorite)
+    }));
+    const existing = savedLists.find(x => normalizeText(x.name) === normalizeText(name));
+    const next: SavedList = {
+      id: existing?.id || `local-${Date.now()}`,
+      cloudId: existing?.cloudId,
+      name,
+      items: snapshot,
+      updatedAt: now
+    };
+    setSavedLists(current => existing ? current.map(x => x.id === existing.id ? next : x) : [next, ...current]);
+    setSavedListName("");
+    setSavedListEditId(null);
+    setSavedListModal(false);
+    setSyncMessage(`Lista "${name}" salva como modelo.`);
+  }
+
+  function openRenameSavedList(saved: SavedList) {
+    setSavedListEditId(saved.id);
+    setSavedListName(saved.name);
+    setSavedListModal(true);
+  }
+
+  async function useSavedList(saved: SavedList) {
+    const pendingNames = new Set(items.filter(x => !x.purchased).map(x => normalizeText(x.name)));
+    const additions = saved.items.filter(item => !pendingNames.has(normalizeText(item.name)));
+    if (!additions.length) {
+      alert("Todos os produtos desta lista já estão na sua lista atual.");
+      return;
+    }
+    const created = additions.map((item, index) => ({
+      id: Date.now() + index,
+      name: item.name,
+      category: item.category || detectCategory(item.name),
+      quantity: Number(item.quantity) || 1,
+      unitPrice: Number(item.unitPrice) || 0,
+      purchased: false,
+      favorite: Boolean(item.favorite),
+      updatedAt: new Date().toISOString()
+    })) as Item[];
+    setItems(current => [...created, ...current]);
+    setPage("Lista de Compras");
+    setSyncMessage(`${created.length} produto(s) adicionados da lista "${saved.name}".`);
+    if (listId && navigator.onLine) {
+      try {
+        const uploaded = await pushItemsToCloud([...created, ...items], listId);
+        setItems(uploaded);
+      } catch (error) {
+        console.error("Erro ao sincronizar produtos da lista salva:", error);
+        setSyncError(error instanceof Error ? error.message : "Não foi possível sincronizar os produtos.");
+      }
+    }
   }
 
   async function deleteCloudHistory(cloudId?: string) {
@@ -707,6 +908,12 @@ export default function App() {
 
           await synchronizeHistory(true, nextListId);
           await synchronizeBudget(true, nextListId);
+          try {
+            const localSaved = JSON.parse(localStorage.getItem(SAVED_LISTS_KEY) || "[]") as SavedList[];
+            await syncSavedLists(nextListId, localSaved);
+          } catch (savedListError) {
+            console.warn("Listas salvas ainda não disponíveis na nuvem:", savedListError);
+          }
 
           const syncedAt = new Date().toISOString();
           localStorage.setItem(SYNC_LAST_SYNC_KEY, syncedAt);
@@ -741,6 +948,18 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(KEY, JSON.stringify(items));
   }, [items]);
+
+  useEffect(() => {
+    localStorage.setItem(SAVED_LISTS_KEY, JSON.stringify(savedLists));
+  }, [savedLists]);
+
+  useEffect(() => {
+    if (syncStatus !== "sincronizado" || !listId || !navigator.onLine) return;
+    const timer = window.setTimeout(() => {
+      void syncSavedLists(listId, savedLists);
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [listId, syncStatus, savedLists]);
 
   useEffect(() => {
     if (syncStatus !== "sincronizado" || !listId || !items.length) return;
@@ -1173,6 +1392,7 @@ export default function App() {
   const nav = [
     ["Dashboard", LayoutDashboard],
     ["Lista de Compras", ClipboardList],
+    ["Listas Salvas", ClipboardList],
     ["Categorias", Tags],
     ["Histórico", ListChecks],
     ["Orçamento", BarChart3],
@@ -2371,7 +2591,52 @@ export default function App() {
             )
           ) : (
             <div className="mx-auto max-w-5xl">
-              {page === "Lista de Compras" ? (
+              {page === "Listas Salvas" ? (
+                <>
+                  <div className="mb-7 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-emerald-600">Modelos reutilizáveis</p>
+                      <h1 className="text-3xl font-bold">Listas Salvas</h1>
+                      <p className="mt-2 text-slate-500">Salve compras recorrentes e reutilize os produtos sem cadastrar tudo novamente.</p>
+                    </div>
+                    <button type="button" onClick={() => setSavedListModal(true)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white">
+                      <Plus size={18} />
+                      Salvar lista atual
+                    </button>
+                  </div>
+
+                  {!savedLists.length ? (
+                    <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center shadow-sm">
+                      <ClipboardList className="mx-auto text-slate-300" size={46} />
+                      <h2 className="mt-4 text-lg font-bold">Nenhuma lista salva</h2>
+                      <p className="mt-2 text-sm text-slate-500">Crie um modelo a partir da sua lista atual para reutilizá-lo depois.</p>
+                      <button type="button" onClick={() => setSavedListModal(true)} className="mt-5 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white">Salvar lista atual</button>
+                    </div>
+                  ) : (
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      {savedLists.map(saved => (
+                        <div key={saved.id} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <h2 className="font-bold">{saved.name}</h2>
+                              <p className="mt-1 text-sm text-slate-400">{saved.items.length} produto(s) · atualizado em {new Date(saved.updatedAt).toLocaleDateString("pt-BR")}</p>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <button type="button" onClick={() => openRenameSavedList(saved)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700" aria-label={`Renomear ${saved.name}`}><Pencil size={17} /></button>
+                              <button type="button" onClick={() => void deleteSavedList(saved)} className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600" aria-label={`Excluir ${saved.name}`}><Trash2 size={17} /></button>
+                            </div>
+                          </div>
+                          <div className="mt-4 flex flex-wrap gap-2">
+                            {saved.items.slice(0, 6).map((item, index) => <span key={`${saved.id}-${index}`} className="rounded-full bg-slate-100 px-3 py-1.5 text-xs text-slate-600">{item.name} × {item.quantity}</span>)}
+                            {saved.items.length > 6 && <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700">+{saved.items.length - 6} produto(s)</span>}
+                          </div>
+                          <button type="button" onClick={() => void useSavedList(saved)} className="mt-5 w-full rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-600">Usar esta lista</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : page === "Lista de Compras" ? (
                 <>
                   <div className="mb-7 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
                     <div>
@@ -3583,6 +3848,25 @@ export default function App() {
             >
               Fechar
             </button>
+          </div>
+        </div>
+      )}
+
+      {savedListModal && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-5 shadow-xl">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-bold">{savedListEditId ? "Renomear lista salva" : "Salvar lista atual"}</h2>
+                <p className="mt-1 text-sm text-slate-400">{savedListEditId ? "Altere o nome deste modelo." : "Crie um nome para reutilizar esta lista depois."}</p>
+              </div>
+              <button type="button" onClick={() => { setSavedListModal(false); setSavedListEditId(null); }} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100"><X size={18} /></button>
+            </div>
+            <input autoFocus value={savedListName} onChange={e => setSavedListName(e.target.value)} onKeyDown={e => { if (e.key === "Enter") saveCurrentAsList(); }} placeholder="Ex.: Compra do mês" className="mt-5 w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-emerald-400" />
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={() => { setSavedListModal(false); setSavedListEditId(null); }} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold">Cancelar</button>
+              <button type="button" onClick={saveCurrentAsList} className="rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white">{savedListEditId ? "Renomear" : "Salvar modelo"}</button>
+            </div>
           </div>
         </div>
       )}
