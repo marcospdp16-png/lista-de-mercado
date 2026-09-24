@@ -1863,7 +1863,7 @@ export default function App() {
             </button>
           </div>
 
-          <nav className="space-y-1 p-4">
+          <nav className="flex-1 space-y-1 overflow-y-auto p-4 pb-24">
             {nav.map(([label, Icon]) => (
               <button
                 key={label}
@@ -1871,7 +1871,7 @@ export default function App() {
                   setPage(label);
                   setMobile(false);
                 }}
-                className={`flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-sm font-medium ${
+                className={`flex min-h-11 w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-sm font-medium ${
                   page === label
                     ? "bg-emerald-500"
                     : "text-slate-300 hover:bg-slate-900"
