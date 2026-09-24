@@ -2172,6 +2172,51 @@ export default function App() {
                 </div>
               </section>
 
+              <section className="mt-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+                  <div className="relative min-w-0 flex-1">
+                    <Search
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                      size={18}
+                    />
+                    <input
+                      value={search}
+                      onChange={e => setSearch(e.target.value)}
+                      placeholder="Pesquisar produto..."
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-4 text-sm outline-none focus:border-emerald-400"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    {(["Todos", "Pendentes", "Comprados", "Favoritos"] as Filter[]).map(option => (
+                      <button
+                        key={option}
+                        type="button"
+                        onClick={() => setFilter(option)}
+                        className={`rounded-xl px-3 py-2 text-xs font-semibold transition ${
+                          filter === option
+                            ? "bg-emerald-500 text-white"
+                            : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                        }`}
+                      >
+                        {option}
+                      </button>
+                    ))}
+                  </div>
+
+                  <select
+                    value={categoryFilter}
+                    onChange={e => setCategoryFilter(e.target.value)}
+                    className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-400"
+                  >
+                    <option value="Todas">Todas as categorias</option>
+                    {categories.map(category => (
+                      <option key={category} value={category}>{category}</option>
+                    ))}
+                  </select>
+                </div>
+              </section>
+
               <section className="mt-5 rounded-2xl border border-slate-200 bg-white shadow-sm">
                 <div className="flex flex-col gap-3 border-b border-slate-100 p-5 sm:flex-row sm:items-center sm:justify-between">
                   <div>
@@ -2206,6 +2251,26 @@ export default function App() {
                           <p className="text-xs text-slate-400">{item.category} · Qtd. {item.quantity}</p>
                         </div>
                         <span className="shrink-0 text-sm font-bold">{money(item.quantity * item.unitPrice)}</span>
+                        <div className="flex shrink-0 items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => openEdit(item)}
+                            className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                            aria-label={`Editar ${item.name}`}
+                            title="Editar"
+                          >
+                            <Pencil size={16} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => del(item.id)}
+                            className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                            aria-label={`Excluir ${item.name}`}
+                            title="Excluir"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -2215,7 +2280,145 @@ export default function App() {
             )
           ) : (
             <div className="mx-auto max-w-5xl">
-              {page === "Histórico" ? (
+              {page === "Lista de Compras" ? (
+                <>
+                  <div className="mb-7">
+                    <p className="text-sm font-medium text-emerald-600">Sua lista completa</p>
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                      <div>
+                        <h1 className="text-3xl font-bold">Lista de Compras</h1>
+                        <p className="mt-2 text-slate-500">
+                          Pesquise, filtre, edite e acompanhe todos os itens da sua lista.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={openAdd}
+                        className="rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white"
+                      >
+                        + Adicionar item
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mb-5 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+                      <div className="relative min-w-0 flex-1">
+                        <Search
+                          className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                          size={18}
+                        />
+                        <input
+                          value={search}
+                          onChange={e => setSearch(e.target.value)}
+                          placeholder="Pesquisar produto..."
+                          className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-10 pr-4 text-sm outline-none focus:border-emerald-400"
+                        />
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        {(["Todos", "Pendentes", "Comprados", "Favoritos"] as Filter[]).map(option => (
+                          <button
+                            key={`list-${option}`}
+                            type="button"
+                            onClick={() => setFilter(option)}
+                            className={`rounded-xl px-3 py-2 text-xs font-semibold ${
+                              filter === option
+                                ? "bg-emerald-500 text-white"
+                                : "border border-slate-200 bg-white text-slate-600"
+                            }`}
+                          >
+                            {option}
+                          </button>
+                        ))}
+                      </div>
+
+                      <select
+                        value={categoryFilter}
+                        onChange={e => setCategoryFilter(e.target.value)}
+                        className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-400"
+                      >
+                        <option value="Todas">Todas as categorias</option>
+                        {categories.map(category => (
+                          <option key={`page-${category}`} value={category}>{category}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+                    {shown.length === 0 ? (
+                      <div className="p-10 text-center">
+                        <ClipboardList className="mx-auto text-slate-300" size={42} />
+                        <h2 className="mt-3 font-bold">Nenhum item encontrado</h2>
+                        <p className="mt-1 text-sm text-slate-400">
+                          Ajuste os filtros ou adicione um novo produto.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-slate-100">
+                        {shown.map(item => (
+                          <div
+                            key={item.id}
+                            className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => toggle(item.id)}
+                              className={`shrink-0 ${item.purchased ? "text-emerald-500" : "text-slate-300 hover:text-emerald-500"}`}
+                              aria-label={item.purchased ? `Desmarcar ${item.name}` : `Marcar ${item.name} como comprado`}
+                            >
+                              {item.purchased ? <CheckCircle2 size={22} /> : <Circle size={22} />}
+                            </button>
+
+                            <div className="min-w-0 flex-1">
+                              <p className={`font-semibold ${item.purchased ? "text-slate-400 line-through" : "text-slate-800"}`}>
+                                {item.name}
+                              </p>
+                              <p className="text-xs text-slate-400">
+                                {item.category} · {money(item.unitPrice)} cada
+                              </p>
+                            </div>
+
+                            <div className="flex items-center gap-1 rounded-lg bg-slate-50 p-1">
+                              <button type="button" onClick={() => changeQuantity(item.id, -1)} className="rounded-md p-1.5 text-slate-600 hover:bg-white">
+                                <Minus size={15} />
+                              </button>
+                              <span className="min-w-8 text-center text-sm font-bold">{item.quantity}</span>
+                              <button type="button" onClick={() => changeQuantity(item.id, 1)} className="rounded-md p-1.5 text-slate-600 hover:bg-white">
+                                <Plus size={15} />
+                              </button>
+                            </div>
+
+                            <span className="shrink-0 font-bold">{money(item.quantity * item.unitPrice)}</span>
+
+                            <div className="flex shrink-0 items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => openEdit(item)}
+                                className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                                aria-label={`Editar ${item.name}`}
+                                title="Editar"
+                              >
+                                <Pencil size={17} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => del(item.id)}
+                                className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                                aria-label={`Excluir ${item.name}`}
+                                title="Excluir"
+                              >
+                                <Trash2 size={17} />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : page === "Histórico" ? (
                 <>
                   <div className="mb-7">
                     <p className="text-sm font-medium text-emerald-600">
